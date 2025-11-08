@@ -46,23 +46,42 @@ namespace MNAuto.Services
             {
                 _loggingService.LogInfo("System", $"Bắt đầu tạo {count} profile mới");
 
-                for (int i = 1; i <= count; i++)
+                // Lấy danh sách tên đã tồn tại để tránh trùng UNIQUE(Name)
+                var existing = await _databaseService.GetAllProfilesAsync();
+                var existingNames = new HashSet<string>(existing.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+
+                for (int i = 0; i < count; i++)
                 {
                     var profile = new Profile
                     {
-                        Name = $"Profile{i}",
+                        Name = GenerateUniqueProfileName(existingNames, "Profile"),
                         WalletPassword = GenerateRandomPassword(15),
                         Status = ProfileStatus.Initializing
                     };
 
-                    var profileId = await _databaseService.CreateProfileAsync(profile);
-                    profile.Id = profileId;
-                    
-                    profiles.Add(profile);
-                    _loggingService.LogInfo(profile.Name, "Đã tạo profile thành công");
+                    // Thử chèn, nếu vẫn gặp UNIQUE do race-condition, sinh tên mới và thử lại
+                    const int maxAttempts = 50;
+                    var attempt = 0;
+                    while (true)
+                    {
+                        try
+                        {
+                            var profileId = await _databaseService.CreateProfileAsync(profile);
+                            profile.Id = profileId;
+
+                            profiles.Add(profile);
+                            _loggingService.LogInfo(profile.Name, "Đã tạo profile thành công");
+                            break;
+                        }
+                        catch (Exception ex) when (ex.Message.Contains("UNIQUE constraint failed: Profiles.Name") && attempt < maxAttempts)
+                        {
+                            attempt++;
+                            profile.Name = GenerateUniqueProfileName(existingNames, "Profile");
+                        }
+                    }
                 }
 
-                _loggingService.LogInfo("System", $"Đã tạo xong {count} profile");
+                _loggingService.LogInfo("System", $"Đã tạo xong {profiles.Count} profile");
                 return profiles;
             }
             catch (Exception ex)
@@ -310,6 +329,22 @@ namespace MNAuto.Services
             
             return new string(Enumerable.Repeat(chars, length)
                 .Select(s => s[random.Next(s.Length)]).ToArray());
+        }
+
+        // Sinh tên profile duy nhất theo mẫu baseName + số tăng dần, tránh trùng với existingNames
+        private string GenerateUniqueProfileName(HashSet<string> existingNames, string baseName = "Profile")
+        {
+            var suffix = 1;
+            string candidate;
+            do
+            {
+                candidate = $"{baseName}{suffix}";
+                suffix++;
+            } while (existingNames.Contains(candidate));
+
+            // Đánh dấu đã dùng để tránh đụng nhau giữa các vòng lặp
+            existingNames.Add(candidate);
+            return candidate;
         }
 
         public async Task DisposeAsync()

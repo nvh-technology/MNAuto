@@ -7,6 +7,9 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace MNAuto.Services
 {
@@ -20,7 +23,12 @@ namespace MNAuto.Services
         private readonly string _extensionPath;
         private LoggingService? _loggingService;
         private DatabaseService? _databaseService;
-
+        private string? _computedExtensionIdFromManifest;
+        // Fallback điều khiển lựa chọn engine khởi chạy
+        private readonly ConcurrentDictionary<int, bool> _forceBundledChromium;
+        // Đánh dấu lần cuối gặp lỗi ERR_BLOCKED_BY_CLIENT cho profile
+        private readonly ConcurrentDictionary<int, bool> _lastBlockedByClient;
+       
         public BrowserService(IPlaywright playwright, LoggingService? loggingService = null, DatabaseService? databaseService = null)
         {
             _playwright = playwright;
@@ -30,17 +38,45 @@ namespace MNAuto.Services
             _extensionIds = new ConcurrentDictionary<int, string>();
             _loggingService = loggingService;
             _databaseService = databaseService;
+
+            _forceBundledChromium = new ConcurrentDictionary<int, bool>();
+            _lastBlockedByClient = new ConcurrentDictionary<int, bool>();
             
-            // Lấy đường dẫn đến thư mục extension lace
-            var currentDirectory = Directory.GetCurrentDirectory();
-            _extensionPath = Path.Combine(currentDirectory, "..", "..", "..", "lace");
-            
-            // Nếu không tìm thấy, thử các đường dẫn khác
-            if (!Directory.Exists(_extensionPath))
+            // Xác định đường dẫn thư mục extension 'lace' một cách bền vững
+            var baseDir = AppContext.BaseDirectory;
+            var candidates = new[]
             {
-                _extensionPath = Path.Combine(currentDirectory, "lace");
+                Path.Combine(baseDir, "lace"),
+                Path.Combine(baseDir, "..", "..", "..", "lace"),
+                Path.Combine(Directory.GetCurrentDirectory(), "lace"),
+                Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "lace")
+            };
+            var foundPath = candidates.FirstOrDefault(p => Directory.Exists(p));
+            var originalPath = Path.GetFullPath(foundPath ?? Path.Combine(baseDir, "lace"));
+
+            // Tạo bản sao extension ở đường dẫn an toàn để tránh ký tự đặc biệt (vd: '#') gây lỗi Chrome
+            var safeRoot = Path.Combine(baseDir, "Extensions", "lace");
+            try
+            {
+                var safeParent = Path.GetDirectoryName(safeRoot);
+                if (!string.IsNullOrEmpty(safeParent))
+                {
+                    Directory.CreateDirectory(safeParent);
+                }
+                if (Directory.Exists(safeRoot))
+                {
+                    Directory.Delete(safeRoot, true);
+                }
+                DirectoryCopy(originalPath, safeRoot, true);
+                _extensionPath = safeRoot;
+                _loggingService?.LogInfo("BrowserService", $"Đã tạo bản sao extension tới đường dẫn an toàn: {_extensionPath}");
             }
-            
+            catch (Exception ex)
+            {
+                _extensionPath = originalPath;
+                _loggingService?.LogWarning("BrowserService", $"Không thể tạo bản sao an toàn cho extension, dùng đường dẫn gốc: {_extensionPath}. Lý do: {ex.Message}");
+            }
+
             _loggingService?.LogInfo("BrowserService", $"Đường dẫn extension Lace: {_extensionPath}");
         }
 
@@ -107,10 +143,9 @@ namespace MNAuto.Services
 
                 // Tạo browser context với profile riêng biệt sử dụng LaunchPersistentContext
                 // LaunchPersistentContextAsync trả về IBrowserContext trực tiếp
-                var context = await _playwright.Chromium.LaunchPersistentContextAsync(profileDataPath, new BrowserTypeLaunchPersistentContextOptions
+                // Tạo options và chọn engine khởi chạy (mặc định Chrome hệ thống, fallback Chromium bundled nếu cần)
+                var launchOptions = new BrowserTypeLaunchPersistentContextOptions
                 {
-                    // Sử dụng Chrome hệ thống để tránh phải tải Chromium của Playwright
-                    Channel = "chrome",
                     Headless = headless, // Theo yêu cầu: headless cho tất cả trừ nút "Mở trình duyệt"
                     SlowMo = 100,
                     ViewportSize = new ViewportSize { Width = 1280, Height = 720 },
@@ -128,10 +163,18 @@ namespace MNAuto.Services
                         "--profile-directory=Profile_" + profile.Id,
                         "--disable-background-timer-throttling",
                         "--disable-backgrounding-occluded-windows",
-                        "--disable-renderer-backgrounding"
+                        "--disable-renderer-backgrounding",
+                        // Giảm thiểu yếu tố bên thứ ba có thể can thiệp
+                        "--disable-sync",
+                        "--metrics-recording-only",
+                        "--disable-breakpad"
                     },
                     Permissions = new[] { "clipboard-read", "clipboard-write" }
-                });
+                };
+                // Luôn dùng Chromium bundled của Playwright theo yêu cầu
+                _loggingService?.LogInfo(profile.Name, "Sử dụng Chromium bundled của Playwright để khởi chạy extension");
+                // Không đặt Channel để Playwright dùng Chromium bundled
+                var context = await _playwright.Chromium.LaunchPersistentContextAsync(profileDataPath, launchOptions);
                 
                 // Cấp quyền clipboard (best-effort) cho extension ID được phát hiện
                 try
@@ -190,9 +233,43 @@ namespace MNAuto.Services
                 _loggingService?.LogInfo(profile.Name, "Truy cập trang tạo wallet");
                 if (!await TryGotoExtensionAsync(profile, page, "/#/setup/create"))
                 {
-                    _loggingService?.LogError(profile.Name, "Không thể mở trang tạo ví Lace");
-                    try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
-                    return false;
+                    // Nếu nguyên nhân là ERR_BLOCKED_BY_CLIENT, thử fallback sang Chromium bundled của Playwright
+                    if (_lastBlockedByClient.TryGetValue(profile.Id, out var blocked) && blocked)
+                    {
+                        _loggingService?.LogWarning(profile.Name, "Phát hiện ERR_BLOCKED_BY_CLIENT. Thử khởi động lại bằng Chromium bundled của Playwright.");
+                        try { await page.CloseAsync(); } catch {}
+                        try { _pages.TryRemove(profile.Id, out _); } catch {}
+
+                        await CloseBrowserAsync(profile.Id);
+                        _forceBundledChromium[profile.Id] = true;
+
+                        var recreated = await CreateBrowserContextAsync(profile, headless: false);
+                        if (!recreated)
+                        {
+                            _loggingService?.LogError(profile.Name, "Không thể tạo lại context với Chromium bundled");
+                            return false;
+                        }
+
+                        var retryContext = _browserContexts[profile.Id];
+                        var retryPage = await retryContext.NewPageAsync();
+                        _pages[profile.Id] = retryPage;
+
+                        _loggingService?.LogInfo(profile.Name, "Thử mở lại trang tạo ví sau fallback");
+                        if (!await TryGotoExtensionAsync(profile, retryPage, "/#/setup/create"))
+                        {
+                            _loggingService?.LogError(profile.Name, "Không thể mở trang tạo ví Lace sau khi fallback Chromium");
+                            try { await retryPage.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
+                            return false;
+                        }
+
+                        page = retryPage;
+                    }
+                    else
+                    {
+                        _loggingService?.LogError(profile.Name, "Không thể mở trang tạo ví Lace");
+                        try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
+                        return false;
+                    }
                 }
                 _loggingService?.LogInfo(profile.Name, $"Đã truy cập trang: {page.Url}");
 
@@ -911,22 +988,52 @@ namespace MNAuto.Services
             }
         }
 
-        // Điều hướng tới trang extension với retry chống net::ERR_ABORTED
+        // Điều hướng tới trang extension với retry, xử lý cả ERR_ABORTED và ERR_BLOCKED_BY_CLIENT.
+        // Chiến lược: vào app.html trước (DOMContentLoaded), sau đó đổi hash client-side để tránh request mới bị chặn.
         private async Task<bool> TryGotoExtensionAsync(Profile profile, IPage page, string pathSuffix, int maxAttempts = 5, int delayMs = 800)
         {
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 try
                 {
-                    var url = await BuildExtensionUrlAsync(profile.Id, pathSuffix);
-                    await page.GotoAsync(url);
+                    // Luôn mở base app.html trước để giảm khả năng bị client chặn deep-link
+                    var baseUrl = await BuildExtensionUrlAsync(profile.Id, "");
+                    _loggingService?.LogInfo(profile.Name, $"Điều hướng extension (base) lần {attempt}/{maxAttempts}: {baseUrl}");
+                    await page.GotoAsync(baseUrl, new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 60000 });
                     await WaitForExtensionReady(page);
                     await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+                    // Nếu cần, điều hướng tới route qua thay đổi hash client-side
+                    if (!string.IsNullOrEmpty(pathSuffix))
+                    {
+                        // Chuẩn hóa suffix sang dạng "#/..."
+                        var normalized = pathSuffix;
+                        if (normalized.StartsWith("/#/"))
+                            normalized = "#" + normalized.Substring(3);
+                        else if (normalized.StartsWith("/"))
+                            normalized = "#" + normalized.Substring(1);
+                        else if (!normalized.StartsWith("#/"))
+                            normalized = "#/" + normalized.TrimStart('#', '/');
+
+                        _loggingService?.LogInfo(profile.Name, $"Điều hướng hash route: {normalized}");
+                        // Đổi hash bằng JS để tránh một navigation mới có thể bị block bởi client
+                        await page.EvaluateAsync("hash => { try { window.location.hash = hash; } catch(e){} }", normalized);
+                        await WaitForExtensionReady(page);
+                        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+                    }
+
                     return true;
                 }
-                catch (PlaywrightException ex) when (ex.Message.Contains("ERR_ABORTED", StringComparison.OrdinalIgnoreCase))
+                catch (PlaywrightException ex) when (
+                    ex.Message.Contains("ERR_ABORTED", StringComparison.OrdinalIgnoreCase) ||
+                    ex.Message.Contains("ERR_BLOCKED_BY_CLIENT", StringComparison.OrdinalIgnoreCase)
+                )
                 {
-                    _loggingService?.LogWarning(profile.Name, $"Điều hướng extension bị ERR_ABORTED (lần {attempt}/{maxAttempts}). Thử lại...");
+                    if (ex.Message.Contains("ERR_BLOCKED_BY_CLIENT", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _lastBlockedByClient[profile.Id] = true;
+                    }
+                    _loggingService?.LogWarning(profile.Name, $"Điều hướng extension bị lỗi phía client ({ex.Message}) (lần {attempt}/{maxAttempts}). Thử lại sau {delayMs}ms...");
                     await page.WaitForTimeoutAsync(delayMs);
                 }
                 catch (Exception ex)
@@ -935,6 +1042,7 @@ namespace MNAuto.Services
                     await page.WaitForTimeoutAsync(delayMs);
                 }
             }
+
             _loggingService?.LogError(profile.Name, "Không thể điều hướng tới trang extension sau nhiều lần thử");
             return false;
         }
@@ -980,7 +1088,7 @@ namespace MNAuto.Services
             catch (Exception ex)
             {
                 _loggingService?.LogError($"Profile{profileId}", $"Lỗi BuildExtensionUrl: {ex.Message}", ex);
-                // Fallback: dùng ID cố định cũ để không làm vỡ luồng hiện tại và CHUẨN HÓA suffix tương tự nhánh chính
+                // Fallback: chuẩn hóa suffix tương tự nhánh chính
                 var fallbackSuffix = pathSuffix ?? string.Empty;
                 if (!string.IsNullOrEmpty(fallbackSuffix))
                 {
@@ -997,6 +1105,53 @@ namespace MNAuto.Services
                         fallbackSuffix = "#/" + fallbackSuffix.TrimStart('#', '/'); // "assets" -> "#/assets"
                     }
                 }
+
+                // Thử tính Extension ID từ manifest "key" (ổn định cho unpacked extension)
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(_computedExtensionIdFromManifest))
+                    {
+                        var manifestFile = Path.Combine(_extensionPath, "manifest.json");
+                        if (File.Exists(manifestFile))
+                        {
+                            var json = File.ReadAllText(manifestFile);
+                            using var doc = JsonDocument.Parse(json);
+                            if (doc.RootElement.TryGetProperty("key", out var keyEl))
+                            {
+                                var keyBase64 = keyEl.GetString();
+                                if (!string.IsNullOrWhiteSpace(keyBase64))
+                                {
+                                    var keyBytes = Convert.FromBase64String(keyBase64);
+                                    using var sha = SHA256.Create();
+                                    var hash = sha.ComputeHash(keyBytes);
+                                    var sb = new StringBuilder(32);
+                                    for (int i = 0; i < 16 && i < hash.Length; i++)
+                                    {
+                                        byte b = hash[i];
+                                        sb.Append((char)('a' + ((b >> 4) & 0xF)));
+                                        sb.Append((char)('a' + (b & 0xF)));
+                                    }
+                                    var computedId = sb.ToString();
+                                    if (computedId.Length == 32)
+                                    {
+                                        _computedExtensionIdFromManifest = computedId;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(_computedExtensionIdFromManifest))
+                    {
+                        return $"chrome-extension://{_computedExtensionIdFromManifest}/app.html{fallbackSuffix}";
+                    }
+                }
+                catch
+                {
+                    // bỏ qua, dùng hardcoded fallback cuối cùng
+                }
+
+                // Fallback cuối cùng: ID cũ (có thể sai, nhưng giữ không vỡ luồng)
                 return $"chrome-extension://gafhhkghbfjjkeiendhlofajokpaflmk/app.html{fallbackSuffix}";
             }
         }
@@ -1004,13 +1159,58 @@ namespace MNAuto.Services
         // Cố gắng phát hiện Extension ID từ Service Worker/Paging của Chromium MV3
         private async Task<string?> ResolveExtensionIdAsync(IBrowserContext context, int profileId, int timeoutMs = 10000)
         {
-            // Cách 1 (ưu tiên, ổn định): đọc từ thư mục profile "Extensions/<extId>/<version>"
+            // Cách 0 (ưu tiên, ổn định cho unpacked extension): tính từ manifest "key"
             try
             {
-                if (_profileDataPaths.TryGetValue(profileId, out var profileDir))
+                if (string.IsNullOrWhiteSpace(_computedExtensionIdFromManifest))
                 {
-                    var extRoot = Path.Combine(profileDir, "Extensions");
-                    if (Directory.Exists(extRoot))
+                    var manifestFile = Path.Combine(_extensionPath, "manifest.json");
+                    if (File.Exists(manifestFile))
+                    {
+                        var json = File.ReadAllText(manifestFile);
+                        using var doc = JsonDocument.Parse(json);
+                        if (doc.RootElement.TryGetProperty("key", out var keyEl))
+                        {
+                            var keyBase64 = keyEl.GetString();
+                            if (!string.IsNullOrWhiteSpace(keyBase64))
+                            {
+                                var keyBytes = Convert.FromBase64String(keyBase64);
+                                using var sha = SHA256.Create();
+                                var hash = sha.ComputeHash(keyBytes);
+                                var sb = new StringBuilder(32);
+                                for (int i = 0; i < 16 && i < hash.Length; i++)
+                                {
+                                    byte b = hash[i];
+                                    sb.Append((char)('a' + ((b >> 4) & 0xF)));
+                                    sb.Append((char)('a' + (b & 0xF)));
+                                }
+                                var computedId = sb.ToString();
+                                if (computedId.Length == 32)
+                                {
+                                    _computedExtensionIdFromManifest = computedId;
+                                    return computedId;
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    return _computedExtensionIdFromManifest;
+                }
+            }
+            catch
+            {
+                // bỏ qua và tiếp tục các cách khác
+            }
+ 
+            // Cách 1: đọc từ thư mục profile "Extensions/<extId>/<version>" (đệ quy để bao phủ Default/, Profile_*/)
+            try
+            {
+                if (_profileDataPaths.TryGetValue(profileId, out var profileDir) && Directory.Exists(profileDir))
+                {
+                    var extRoots = Directory.GetDirectories(profileDir, "Extensions", SearchOption.AllDirectories);
+                    foreach (var extRoot in extRoots)
                     {
                         var idDirs = Directory.GetDirectories(extRoot);
                         foreach (var idDir in idDirs)
@@ -1025,7 +1225,7 @@ namespace MNAuto.Services
                 }
             }
             catch { }
-
+  
             // Cách 2 (fallback): dò các trang đang mở có scheme chrome-extension://
             var start = DateTime.UtcNow;
             while ((DateTime.UtcNow - start).TotalMilliseconds < timeoutMs)
@@ -1045,11 +1245,38 @@ namespace MNAuto.Services
                     }
                 }
                 catch { }
-
+  
                 await Task.Delay(300);
             }
-
+  
             return null;
+        }
+
+        // Helper: sao chép thư mục extension tới đường dẫn an toàn (tránh ký tự đặc biệt như '#')
+        private static void DirectoryCopy(string sourceDirName, string destDirName, bool copySubDirs)
+        {
+            var dir = new DirectoryInfo(sourceDirName);
+            if (!dir.Exists)
+            {
+                throw new DirectoryNotFoundException($"Source directory not found: {sourceDirName}");
+            }
+
+            Directory.CreateDirectory(destDirName);
+
+            foreach (var file in dir.GetFiles())
+            {
+                var tempPath = Path.Combine(destDirName, file.Name);
+                file.CopyTo(tempPath, true);
+            }
+
+            if (copySubDirs)
+            {
+                foreach (var subdir in dir.GetDirectories())
+                {
+                    var destSubDir = Path.Combine(destDirName, subdir.Name);
+                    DirectoryCopy(subdir.FullName, destSubDir, true);
+                }
+            }
         }
     }
 }
