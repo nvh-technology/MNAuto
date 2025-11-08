@@ -119,6 +119,44 @@ namespace MNAuto.Services
             }
         }
 
+        // Helper: kiểm tra và chờ preloader (#preloader) biến mất trước khi thao tác
+        private async Task<bool> IsPreloaderVisibleAsync(IPage page)
+        {
+            try
+            {
+                return await page.EvaluateAsync<bool>("() => { const el = document.getElementById('preloader'); if (!el) return false; const style = window.getComputedStyle(el); const hidden = style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0'; const rect = el.getBoundingClientRect(); const sizeZero = rect.width === 0 && rect.height === 0; return !(hidden || sizeZero); }");
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private async Task WaitUntilNoPreloaderAsync(IPage page, int timeoutMs = 60000)
+        {
+            var start = DateTime.UtcNow;
+            while ((DateTime.UtcNow - start).TotalMilliseconds < timeoutMs)
+            {
+                bool visible = await IsPreloaderVisibleAsync(page);
+                if (!visible) return;
+                await page.WaitForTimeoutAsync(200);
+            }
+        }
+
+        private async Task SafeClickAsync(IPage page, string selector, int timeoutMs = 60000)
+        {
+            await WaitUntilNoPreloaderAsync(page, timeoutMs);
+            await page.WaitForSelectorAsync(selector, new() { State = WaitForSelectorState.Visible, Timeout = timeoutMs });
+            await page.ClickAsync(selector);
+        }
+
+        private async Task SafeFillAsync(IPage page, string selector, string value, int timeoutMs = 60000)
+        {
+            await WaitUntilNoPreloaderAsync(page, timeoutMs);
+            await page.WaitForSelectorAsync(selector, new() { State = WaitForSelectorState.Visible, Timeout = timeoutMs });
+            await page.FillAsync(selector, value);
+        }
+ 
         public async Task<bool> CreateBrowserContextAsync(Profile profile, bool headless = false)
         {
             try
@@ -229,6 +267,43 @@ namespace MNAuto.Services
                 var page = await context.NewPageAsync();
                 _pages[profile.Id] = page;
 
+                // Kiểm tra DB trước: nếu đã có đủ dữ liệu thì mở assets để xác nhận/đồng bộ rồi kết thúc sớm
+                var latestProfilePre = profile;
+                if (_databaseService != null)
+                {
+                    var dbProfilePre = await _databaseService.GetProfileAsync(profile.Id);
+                    if (dbProfilePre != null) latestProfilePre = dbProfilePre;
+                }
+                var hasPwdPre  = !string.IsNullOrWhiteSpace(latestProfilePre.WalletPassword);
+                var hasRecPre  = !string.IsNullOrWhiteSpace(latestProfilePre.RecoveryPhrase);
+                var hasAddrPre = !string.IsNullOrWhiteSpace(latestProfilePre.WalletAddress);
+
+                if (hasPwdPre && hasRecPre && hasAddrPre)
+                {
+                    _loggingService?.LogInfo(profile.Name, "DB có đủ address/password/phrase -> bỏ qua tạo ví, điều hướng sang assets để xác nhận và kết thúc.");
+                    var gotoAssetsOk = await TryGotoExtensionAsync(profile, page, "/#/assets");
+                    if (gotoAssetsOk)
+                    {
+                        try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
+                        return true;
+                    }
+                }
+                else if (hasPwdPre && hasRecPre && !hasAddrPre)
+                {
+                    _loggingService?.LogInfo(profile.Name, "DB có password/phrase nhưng thiếu address -> điều hướng sang assets để lấy địa chỉ rồi kết thúc.");
+                    var gotoAssetsOk2 = await TryGotoExtensionAsync(profile, page, "/#/assets");
+                    if (gotoAssetsOk2)
+                    {
+                        var extractedPre = await ExtractWalletAddressAsync(latestProfilePre, page);
+                        if (extractedPre && _databaseService != null)
+                        {
+                            await _databaseService.UpdateProfileAsync(latestProfilePre);
+                        }
+                        try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
+                        return extractedPre;
+                    }
+                }
+
                 // Truy cập trang tạo wallet
                 _loggingService?.LogInfo(profile.Name, "Truy cập trang tạo wallet");
                 if (!await TryGotoExtensionAsync(profile, page, "/#/setup/create"))
@@ -272,7 +347,7 @@ namespace MNAuto.Services
                     }
                 }
                 _loggingService?.LogInfo(profile.Name, $"Đã truy cập trang: {page.Url}");
-
+ 
                 // Kiểm tra xem đã bị chuyển hướng sang trang assets chưa
                 var currentUrl = page.Url;
                 // Lấy bản ghi mới nhất từ database để đối chiếu dữ liệu
@@ -282,12 +357,58 @@ namespace MNAuto.Services
                     var dbProfile = await _databaseService.GetProfileAsync(profile.Id);
                     if (dbProfile != null) latestProfile = dbProfile;
                 }
+
+                // Sau khi vào setup/create: chờ load và kiểm tra ví đã tạo chưa (tránh khởi tạo lại)
+                _loggingService?.LogInfo(profile.Name, "Chờ trang load xong => Kiểm tra ví đã tạo chưa");
+                await WaitForExtensionReady(page);
+                await WaitUntilNoPreloaderAsync(page);
+                var hasPwd  = !string.IsNullOrWhiteSpace(latestProfile.WalletPassword);
+                var hasRec  = !string.IsNullOrWhiteSpace(latestProfile.RecoveryPhrase);
+                var hasAddr = !string.IsNullOrWhiteSpace(latestProfile.WalletAddress);
+
+                // Nếu DB đã có đủ dữ liệu, thử điều hướng sang assets để xác nhận đã khởi tạo -> kết thúc sớm
+                if (hasPwd && hasRec && hasAddr)
+                {
+                    var navAssetsOk = await TryGotoExtensionAsync(profile, page, "/#/assets");
+                    if (navAssetsOk)
+                    {
+                        _loggingService?.LogInfo(profile.Name, "DB có đủ address/password/phrase và truy cập assets thành công -> xác nhận đã khởi tạo, kết thúc sớm.");
+                        try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
+                        return true;
+                    }
+                }
+                // Nếu đã có password/phrase nhưng thiếu address, vẫn thử sang assets để lấy address và kết thúc sớm nếu thành công
+                else if (hasPwd && hasRec && !hasAddr)
+                {
+                    var navAssetsOk2 = await TryGotoExtensionAsync(profile, page, "/#/assets");
+                    if (navAssetsOk2)
+                    {
+                        var extracted = await ExtractWalletAddressAsync(latestProfile, page);
+                        if (extracted && _databaseService != null)
+                        {
+                            await _databaseService.UpdateProfileAsync(latestProfile);
+                        }
+                        try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
+                        return extracted;
+                    }
+                }
                 
                 if (currentUrl.Contains("/assets"))
                 {
+                    var assetsAtExtension = currentUrl.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase) && currentUrl.Contains("/app.html#/assets");
                     var missingPassword = string.IsNullOrWhiteSpace(latestProfile.WalletPassword);
                     var missingRecovery = string.IsNullOrWhiteSpace(latestProfile.RecoveryPhrase);
+                    var missingAddress = string.IsNullOrWhiteSpace(latestProfile.WalletAddress);
                     
+                    // Theo yêu cầu "Nút khởi tạo": nếu DB có đủ address/password/phrase và đang ở trang assets của extension -> xác nhận đã khởi tạo thành công
+                    if (assetsAtExtension && !missingPassword && !missingRecovery && !missingAddress)
+                    {
+                        _loggingService?.LogInfo(profile.Name, "Xác nhận đã khởi tạo thành công (nút khởi tạo): DB có đủ address/password/phrase và trình duyệt đang ở app.html#/assets.");
+                        try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
+                        return true;
+                    }
+                    
+                    // Nếu thiếu password hoặc recovery -> xóa dữ liệu và khởi tạo lại
                     if (missingPassword || missingRecovery)
                     {
                         _loggingService?.LogWarning(profile.Name, "Bị chuyển hướng sang assets nhưng thiếu dữ liệu (password hoặc Recovery Phrase). Xóa dữ liệu extension và khởi tạo lại.");
@@ -328,7 +449,16 @@ namespace MNAuto.Services
                     }
                     else
                     {
-                        _loggingService?.LogInfo(profile.Name, "Wallet đã tồn tại và dữ liệu đầy đủ. Tiếp tục lấy địa chỉ ví.");
+                        // Thiếu mỗi địa chỉ ví -> vẫn coi wallet tồn tại, chỉ lấy địa chỉ và cập nhật DB
+                        if (missingAddress)
+                        {
+                            _loggingService?.LogInfo(profile.Name, "Wallet đã tồn tại nhưng thiếu địa chỉ ví. Tiếp tục lấy địa chỉ ví.");
+                        }
+                        else
+                        {
+                            _loggingService?.LogInfo(profile.Name, "Wallet đã tồn tại và dữ liệu đầy đủ. Tiếp tục xác nhận/đồng bộ địa chỉ ví.");
+                        }
+                        
                         var ok = await ExtractWalletAddressAsync(latestProfile, page);
                         if (ok && _databaseService != null)
                         {
@@ -342,7 +472,7 @@ namespace MNAuto.Services
                 // Bước 1: Click Next
                 _loggingService?.LogInfo(profile.Name, "Bước 1: Click Next");
                 await WaitForVisibleAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000);
-                await page.ClickAsync("[data-testid='wallet-setup-step-btn-next']");
+                await SafeClickAsync(page, "[data-testid='wallet-setup-step-btn-next']");
                 await page.WaitForTimeoutAsync(800);
 
                 // Bước 2: Copy recovery phrase (không dùng clipboard, vẫn click để theo luồng UI)
@@ -364,7 +494,7 @@ namespace MNAuto.Services
                 };
                 
                 await WaitForVisibleAsync(page, "[data-testid='copy-to-clipboard-button']", 60000);
-                await page.ClickAsync("[data-testid='copy-to-clipboard-button']");
+                await SafeClickAsync(page, "[data-testid='copy-to-clipboard-button']");
                 
                 // Chờ một chút để UI ổn định
                 await page.WaitForTimeoutAsync(1000);
@@ -412,7 +542,7 @@ namespace MNAuto.Services
                 // Bước 3: Click Next
                 _loggingService?.LogInfo(profile.Name, "Bước 3: Click Next");
                 await WaitForVisibleAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000);
-                await page.ClickAsync("[data-testid='wallet-setup-step-btn-next']");
+                await SafeClickAsync(page, "[data-testid='wallet-setup-step-btn-next']");
                 await page.WaitForTimeoutAsync(800);
 
                 // Bước 4: Điền recovery phrase vào từng ô (không dùng Paste from clipboard)
@@ -444,6 +574,7 @@ namespace MNAuto.Services
                 var maxFill = Math.Min(fillWords.Length, inputs.Count);
                 
                 // Điền lần lượt
+                await WaitUntilNoPreloaderAsync(page);
                 for (int i = 0; i < maxFill; i++)
                 {
                     try
@@ -469,15 +600,15 @@ namespace MNAuto.Services
                 // Bước 5: Click Next
                 _loggingService?.LogInfo(profile.Name, "Bước 5: Click Next");
                 await WaitForVisibleAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000);
-                await page.ClickAsync("[data-testid='wallet-setup-step-btn-next']");
+                await SafeClickAsync(page, "[data-testid='wallet-setup-step-btn-next']");
                 await page.WaitForTimeoutAsync(800);
 
                 // Bước 6: Nhập mật khẩu wallet
                 _loggingService?.LogInfo(profile.Name, "Bước 6: Nhập mật khẩu wallet");
                 await WaitForVisibleAsync(page, "input[data-testid='wallet-password-verification-input']", 60000);
                 await WaitForVisibleAsync(page, "input[data-testid='wallet-password-confirmation-input']", 60000);
-                await page.FillAsync("input[data-testid='wallet-password-verification-input']", profile.WalletPassword);
-                await page.FillAsync("input[data-testid='wallet-password-confirmation-input']", profile.WalletPassword);
+                await SafeFillAsync(page, "input[data-testid='wallet-password-verification-input']", profile.WalletPassword);
+                await SafeFillAsync(page, "input[data-testid='wallet-password-confirmation-input']", profile.WalletPassword);
 
                 // Bước 7: Click Open wallet
                 _loggingService?.LogInfo(profile.Name, "Bước 7: Click Open wallet");
@@ -581,6 +712,7 @@ namespace MNAuto.Services
         {
             try
             {
+                await WaitUntilNoPreloaderAsync(page);
                 // Tìm button theo text chứa (contains) thay vì chính xác
                 var button = await page.QuerySelectorAsync($"button:has-text(\"{buttonText}\")");
                 if (button == null)
@@ -807,19 +939,19 @@ namespace MNAuto.Services
                 // Click menu
                 _loggingService?.LogInfo(profile.Name, "Click menu");
                 await WaitForVisibleAsync(page, "[id=\"menu\"]", 60000);
-                await page.ClickAsync("[id=\"menu\"]");
+                await SafeClickAsync(page, "[id=\"menu\"]");
                 await page.WaitForTimeoutAsync(1000);
                 
                 // Click Sign Message
                 _loggingService?.LogInfo(profile.Name, "Click Sign Message");
                 await WaitForVisibleAsync(page, "[data-testid=\"header-menu-sign-message\"]", 60000);
-                await page.ClickAsync("[data-testid=\"header-menu-sign-message\"]");
+                await SafeClickAsync(page, "[data-testid=\"header-menu-sign-message\"]");
                 await page.WaitForTimeoutAsync(1500);
                 
                 // Click select address button
                 _loggingService?.LogInfo(profile.Name, "Click select address button");
                 await WaitForVisibleAsync(page, "button[data-testid=\"select-address-button\"]", 60000);
-                await page.ClickAsync("button[data-testid=\"select-address-button\"]");
+                await SafeClickAsync(page, "button[data-testid=\"select-address-button\"]");
                 await WaitForVisibleAsync(page, "[data-testid=\"address-dropdown-menu\"]", 60000);
                 
                 // Tìm và click vào address có chứa "Payment"
@@ -832,6 +964,7 @@ namespace MNAuto.Services
                     var text = await item.InnerTextAsync();
                     if (text.Contains("Payment"))
                     {
+                        await WaitUntilNoPreloaderAsync(page);
                         await item.ClickAsync();
                         foundPayment = true;
                         _loggingService?.LogInfo(profile.Name, "Đã chọn address Payment");
@@ -850,23 +983,23 @@ namespace MNAuto.Services
                 // Paste message to sign
                 _loggingService?.LogInfo(profile.Name, "Paste message to sign");
                 await WaitForVisibleAsync(page, "textarea[data-testid=\"sign-message-input\"]", 60000);
-                await page.FillAsync("textarea[data-testid=\"sign-message-input\"]", messageToSign);
+                await SafeFillAsync(page, "textarea[data-testid=\"sign-message-input\"]", messageToSign);
                 await page.WaitForTimeoutAsync(1000);
                 
                 // Click sign message button
                 _loggingService?.LogInfo(profile.Name, "Click sign message button");
-                await page.ClickAsync("button[data-testid=\"sign-message-button\"]");
+                await SafeClickAsync(page, "button[data-testid=\"sign-message-button\"]");
                 await page.WaitForTimeoutAsync(2000);
                 
                 // Nhập password
                 _loggingService?.LogInfo(profile.Name, "Nhập password");
                 await WaitForVisibleAsync(page, "[data-testid=\"password-input\"]", 60000);
-                await page.FillAsync("[data-testid=\"password-input\"]", profile.WalletPassword);
+                await SafeFillAsync(page, "[data-testid=\"password-input\"]", profile.WalletPassword);
                 await page.WaitForTimeoutAsync(1000);
                 
                 // Click sign message button lần nữa
                 _loggingService?.LogInfo(profile.Name, "Xác nhận ký message");
-                await page.ClickAsync("button[data-testid=\"sign-message-button\"]");
+                await SafeClickAsync(page, "button[data-testid=\"sign-message-button\"]");
                 await page.WaitForTimeoutAsync(3000);
                 
                 // Lấy signature
