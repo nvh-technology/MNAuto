@@ -52,6 +52,7 @@
             this.lblLog = new System.Windows.Forms.Label();
             this.txtLog = new System.Windows.Forms.TextBox();
             this.btnClearLog = new System.Windows.Forms.Button();
+            this.btnExportAll = new System.Windows.Forms.Button();
             
             // Cấu hình các controls
             this.lblProfileCount.AutoSize = true;
@@ -93,10 +94,13 @@
             this.dgvProfiles.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.AutoSize;
             this.dgvProfiles.Location = new System.Drawing.Point(12, 70);
             this.dgvProfiles.Name = "dgvProfiles";
-            this.dgvProfiles.ReadOnly = true;
+            this.dgvProfiles.ReadOnly = false;
+            this.dgvProfiles.EditMode = System.Windows.Forms.DataGridViewEditMode.EditOnEnter;
             this.dgvProfiles.RowTemplate.Height = 24;
             this.dgvProfiles.Size = new System.Drawing.Size(1176, 300);
             this.dgvProfiles.TabIndex = 4;
+            this.dgvProfiles.CurrentCellDirtyStateChanged += new System.EventHandler(this.dgvProfiles_CurrentCellDirtyStateChanged);
+            
             
             this.btnInitializeSelected.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
             this.btnInitializeSelected.Location = new System.Drawing.Point(12, 380);
@@ -154,6 +158,15 @@
             this.btnRefresh.UseVisualStyleBackColor = true;
             this.btnRefresh.Click += new System.EventHandler(this.btnRefresh_Click);
             
+            this.btnExportAll.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+            this.btnExportAll.Location = new System.Drawing.Point(768, 380);
+            this.btnExportAll.Name = "btnExportAll";
+            this.btnExportAll.Size = new System.Drawing.Size(150, 30);
+            this.btnExportAll.TabIndex = 11;
+            this.btnExportAll.Text = "Export All Profile";
+            this.btnExportAll.UseVisualStyleBackColor = true;
+            this.btnExportAll.Click += new System.EventHandler(this.btnExportAll_Click);
+            
             this.lblLog.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
             this.lblLog.AutoSize = true;
@@ -196,6 +209,7 @@
             this.Controls.Add(this.btnCloseSelected);
             this.Controls.Add(this.btnDeleteSelected);
             this.Controls.Add(this.btnRefresh);
+            this.Controls.Add(this.btnExportAll);
             this.Controls.Add(this.lblLog);
             this.Controls.Add(this.txtLog);
             this.Controls.Add(this.btnClearLog);
@@ -215,6 +229,7 @@
         private System.Windows.Forms.Button btnCloseSelected;
         private System.Windows.Forms.Button btnDeleteSelected;
         private System.Windows.Forms.Button btnRefresh;
+        private System.Windows.Forms.Button btnExportAll;
         private System.Windows.Forms.Label lblLog;
         private System.Windows.Forms.TextBox txtLog;
         private System.Windows.Forms.Button btnClearLog;

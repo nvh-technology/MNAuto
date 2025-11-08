@@ -83,7 +83,7 @@ namespace MNAuto.Services
             }
         }
 
-        public async Task<bool> CreateBrowserContextAsync(Profile profile, bool headless = true)
+        public async Task<bool> CreateBrowserContextAsync(Profile profile, bool headless = false)
         {
             try
             {
@@ -109,6 +109,8 @@ namespace MNAuto.Services
                 // LaunchPersistentContextAsync trả về IBrowserContext trực tiếp
                 var context = await _playwright.Chromium.LaunchPersistentContextAsync(profileDataPath, new BrowserTypeLaunchPersistentContextOptions
                 {
+                    // Sử dụng Chrome hệ thống để tránh phải tải Chromium của Playwright
+                    Channel = "chrome",
                     Headless = headless, // Theo yêu cầu: headless cho tất cả trừ nút "Mở trình duyệt"
                     SlowMo = 100,
                     ViewportSize = new ViewportSize { Width = 1280, Height = 720 },
@@ -189,6 +191,7 @@ namespace MNAuto.Services
                 if (!await TryGotoExtensionAsync(profile, page, "/#/setup/create"))
                 {
                     _loggingService?.LogError(profile.Name, "Không thể mở trang tạo ví Lace");
+                    try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
                     return false;
                 }
                 _loggingService?.LogInfo(profile.Name, $"Đã truy cập trang: {page.Url}");
@@ -254,6 +257,7 @@ namespace MNAuto.Services
                         {
                             await _databaseService.UpdateProfileAsync(latestProfile);
                         }
+                        try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
                         return ok;
                     }
                 }
@@ -412,16 +416,20 @@ namespace MNAuto.Services
                 if (!await TryGotoExtensionAsync(profile, page, "/#/assets"))
                 {
                     _loggingService?.LogError(profile.Name, "Không thể điều hướng tới trang assets");
+                    try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
                     return false;
                 }
 
                 // Lấy địa chỉ wallet
                 _loggingService?.LogInfo(profile.Name, "Bắt đầu lấy địa chỉ wallet");
-                return await ExtractWalletAddressAsync(profile, page);
+                var __result = await ExtractWalletAddressAsync(profile, page);
+                try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
+                return __result;
 
             }
             catch (Exception ex)
             {
+                try { if (_pages.ContainsKey(profile.Id)) { await _pages[profile.Id].CloseAsync(); _pages.TryRemove(profile.Id, out _); } } catch {}
                 _loggingService?.LogError(profile.Name, $"Lỗi khi khởi tạo wallet: {ex.Message}", ex);
                 return false;
             }
@@ -949,18 +957,47 @@ namespace MNAuto.Services
                     extId = resolved!;
                 }
 
+                // Chuẩn hóa suffix để luôn tương thích hash routing "#/..."
                 var suffix = pathSuffix ?? string.Empty;
-                if (!string.IsNullOrEmpty(suffix) && suffix.StartsWith("/#/"))
+                if (!string.IsNullOrEmpty(suffix))
                 {
-                    suffix = suffix.Substring(1); // "/#/..." -> "#/..."
+                    if (suffix.StartsWith("/#/"))
+                    {
+                        suffix = suffix.Substring(1); // "/#/..." -> "#/..."
+                    }
+                    else if (suffix.StartsWith("/"))
+                    {
+                        suffix = "#" + suffix;        // "/assets" -> "#/assets"
+                    }
+                    else if (!suffix.StartsWith("#/"))
+                    {
+                        suffix = "#/" + suffix.TrimStart('#', '/'); // "assets" -> "#/assets"
+                    }
                 }
+
                 return $"chrome-extension://{extId}/app.html{suffix}";
             }
             catch (Exception ex)
             {
                 _loggingService?.LogError($"Profile{profileId}", $"Lỗi BuildExtensionUrl: {ex.Message}", ex);
-                // Fallback: dùng ID cố định cũ để không làm vỡ luồng hiện tại
-                return $"chrome-extension://gafhhkghbfjjkeiendhlofajokpaflmk/app.html{pathSuffix}";
+                // Fallback: dùng ID cố định cũ để không làm vỡ luồng hiện tại và CHUẨN HÓA suffix tương tự nhánh chính
+                var fallbackSuffix = pathSuffix ?? string.Empty;
+                if (!string.IsNullOrEmpty(fallbackSuffix))
+                {
+                    if (fallbackSuffix.StartsWith("/#/"))
+                    {
+                        fallbackSuffix = fallbackSuffix.Substring(1); // "/#/..." -> "#/..."
+                    }
+                    else if (fallbackSuffix.StartsWith("/"))
+                    {
+                        fallbackSuffix = "#" + fallbackSuffix;        // "/assets" -> "#/assets"
+                    }
+                    else if (!fallbackSuffix.StartsWith("#/"))
+                    {
+                        fallbackSuffix = "#/" + fallbackSuffix.TrimStart('#', '/'); // "assets" -> "#/assets"
+                    }
+                }
+                return $"chrome-extension://gafhhkghbfjjkeiendhlofajokpaflmk/app.html{fallbackSuffix}";
             }
         }
 

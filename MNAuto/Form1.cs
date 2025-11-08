@@ -10,6 +10,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.IO;
+using System.Text;
 
 namespace MNAuto
 {
@@ -20,6 +22,7 @@ namespace MNAuto
         private ProfileManagerService? _profileManagerService;
         private ScavengerMineService? _scavengerMineService;
         private List<Profile> _profiles = new List<Profile>();
+        private HashSet<int> _selectedProfileIds = new HashSet<int>();
         private bool _isInitialized = false;
 
         // Trạng thái challenge toàn cục & kết quả giải gần nhất
@@ -32,6 +35,9 @@ namespace MNAuto
         public Form1()
         {
             InitializeComponent();
+            // Gắn thêm sự kiện để ổn định checkbox đơn lẻ
+            this.dgvProfiles.CellValueChanged += new DataGridViewCellEventHandler(this.dgvProfiles_CellValueChanged);
+            this.dgvProfiles.DataBindingComplete += new DataGridViewBindingCompleteEventHandler(this.dgvProfiles_DataBindingComplete);
             InitializeServices();
         }
 
@@ -97,15 +103,18 @@ namespace MNAuto
                 return;
             }
 
-            // Lưu lại trạng thái checkbox trước khi refresh
-            var selectedStates = new Dictionary<int, bool>();
+            // Đồng bộ _selectedProfileIds trước khi refresh từ trạng thái hiện tại của lưới
+            var idsToAdd = new List<int>();
+            var idsToRemove = new List<int>();
             foreach (DataGridViewRow row in dgvProfiles.Rows)
             {
-                if (row.Cells["Selected"].Value != null)
-                {
-                    selectedStates[(int)row.Cells["Id"].Value] = (bool)row.Cells["Selected"].Value;
-                }
+                if (row.Cells["Id"].Value == null) continue;
+                var id = (int)row.Cells["Id"].Value;
+                var isChecked = row.Cells["Selected"].Value is bool b && b;
+                if (isChecked) idsToAdd.Add(id); else idsToRemove.Add(id);
             }
+            foreach (var id in idsToAdd) _selectedProfileIds.Add(id);
+            foreach (var id in idsToRemove) _selectedProfileIds.Remove(id);
 
             dgvProfiles.DataSource = null;
             dgvProfiles.DataSource = _profiles.Select(p => new
@@ -204,16 +213,24 @@ namespace MNAuto
                     AutoSizeMode = DataGridViewAutoSizeColumnMode.None
                 };
                 dgvProfiles.Columns.Insert(0, checkBoxColumn);
+                // Cấu hình tránh trạng thái 3 giá trị gây nhiễu toggling
+                checkBoxColumn.ThreeState = false;
+                checkBoxColumn.TrueValue = true;
+                checkBoxColumn.FalseValue = false;
+                checkBoxColumn.IndeterminateValue = false;
             }
 
-            // Khôi phục trạng thái checkbox
+            // Đảm bảo chỉ cột "Selected" cho phép chỉnh sửa, các cột dữ liệu còn lại readonly để tránh lỗi sửa dữ liệu ẩn danh
+            foreach (DataGridViewColumn col in dgvProfiles.Columns)
+            {
+                col.ReadOnly = col.Name != "Selected";
+            }
+
+            // Khôi phục trạng thái checkbox theo _selectedProfileIds, tránh null
             foreach (DataGridViewRow row in dgvProfiles.Rows)
             {
                 var profileId = (int)row.Cells["Id"].Value;
-                if (selectedStates.ContainsKey(profileId))
-                {
-                    row.Cells["Selected"].Value = selectedStates[profileId];
-                }
+                row.Cells["Selected"].Value = _selectedProfileIds.Contains(profileId);
             }
         }
 
@@ -668,26 +685,27 @@ namespace MNAuto
         private void chkSelectAll_CheckedChanged(object sender, EventArgs e)
         {
             if (dgvProfiles.Rows.Count == 0) return;
-            
+
+            if (chkSelectAll.Checked)
+            {
+                foreach (var p in _profiles)
+                    _selectedProfileIds.Add(p.Id);
+            }
+            else
+            {
+                _selectedProfileIds.Clear();
+            }
+
             foreach (DataGridViewRow row in dgvProfiles.Rows)
             {
+                if (row.Cells["Id"].Value == null) continue;
                 row.Cells["Selected"].Value = chkSelectAll.Checked;
             }
         }
 
         private List<int> GetSelectedProfileIds()
         {
-            var selectedIds = new List<int>();
-            
-            foreach (DataGridViewRow row in dgvProfiles.Rows)
-            {
-                if (row.Cells["Selected"].Value != null && (bool)row.Cells["Selected"].Value)
-                {
-                    selectedIds.Add((int)row.Cells["Id"].Value);
-                }
-            }
-            
-            return selectedIds;
+            return _selectedProfileIds.ToList();
         }
 
         private async void Form1_FormClosing(object sender, FormClosingEventArgs e)
@@ -710,6 +728,123 @@ namespace MNAuto
             {
                 _loggingService?.LogError("System", $"Lỗi khi đóng ứng dụng: {ex.Message}");
             }
+        }
+
+        // Commit ngay khi user click vào checkbox để nhận giá trị mới
+        private void dgvProfiles_CurrentCellDirtyStateChanged(object? sender, EventArgs e)
+        {
+            if (dgvProfiles.IsCurrentCellDirty)
+            {
+                dgvProfiles.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                dgvProfiles.EndEdit();
+            }
+        }
+
+        // Sau khi binding xong, ép trạng thái Selected từ _selectedProfileIds và khóa các cột dữ liệu
+        private void dgvProfiles_DataBindingComplete(object? sender, DataGridViewBindingCompleteEventArgs e)
+        {
+            try
+            {
+                foreach (DataGridViewRow row in dgvProfiles.Rows)
+                {
+                    if (row.Cells["Id"].Value == null) continue;
+                    var id = (int)row.Cells["Id"].Value;
+                    row.Cells["Selected"].Value = _selectedProfileIds.Contains(id);
+                }
+                foreach (DataGridViewColumn col in dgvProfiles.Columns)
+                {
+                    col.ReadOnly = col.Name != "Selected";
+                }
+            }
+            catch { }
+        }
+
+        // Khi một ô Selected đổi giá trị, cập nhật _selectedProfileIds ngay
+        private void dgvProfiles_CellValueChanged(object? sender, DataGridViewCellEventArgs e)
+        {
+            try
+            {
+                if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+                if (dgvProfiles.Columns[e.ColumnIndex].Name != "Selected") return;
+
+                var row = dgvProfiles.Rows[e.RowIndex];
+                if (row.Cells["Id"].Value == null) return;
+
+                var id = (int)row.Cells["Id"].Value;
+                var isChecked = row.Cells["Selected"].Value is bool b && b;
+                if (isChecked)
+                    _selectedProfileIds.Add(id);
+                else
+                    _selectedProfileIds.Remove(id);
+            }
+            catch { }
+        }
+
+        // Bảo đảm toggle checkbox khi click vào ô "Selected"
+        private void dgvProfiles_CellContentClick(object? sender, DataGridViewCellEventArgs e)
+        {
+            try
+            {
+                if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+                if (dgvProfiles.Columns[e.ColumnIndex].Name == "Selected")
+                {
+                    var cell = dgvProfiles.Rows[e.RowIndex].Cells["Selected"];
+                    var current = cell.Value as bool? ?? false;
+                    cell.Value = !current;
+                }
+            }
+            catch { /* ignore UI toggle errors */ }
+        }
+
+        // Export toàn bộ profiles ra CSV mở bằng Excel: Tên profile, WalletAddress, WalletPassword, RecoveryPhrase
+        private void btnExportAll_Click(object? sender, EventArgs e)
+        {
+            try
+            {
+                var profiles = _profiles ?? new List<Profile>();
+                if (profiles.Count == 0)
+                {
+                    MessageBox.Show("Không có profile để export", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                using (var sfd = new SaveFileDialog())
+                {
+                    sfd.Filter = "CSV (Comma delimited) (*.csv)|*.csv";
+                    sfd.FileName = $"profiles_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+                    if (sfd.ShowDialog() != DialogResult.OK) return;
+
+                    var sb = new StringBuilder();
+                    // Header
+                    sb.AppendLine(ToCsv(new[] { "Tên profile", "WalletAddress", "WalletPassword", "RecoveryPhrase" }));
+                    // Rows
+                    foreach (var p in profiles)
+                    {
+                        sb.AppendLine(ToCsv(new[] { p.Name, p.WalletAddress, p.WalletPassword, p.RecoveryPhrase }));
+                    }
+
+                    // Viết file với BOM để Excel hiển thị Unicode tiếng Việt đúng
+                    var utf8WithBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+                    File.WriteAllText(sfd.FileName, sb.ToString(), utf8WithBom);
+
+                    MessageBox.Show($"Đã export {profiles.Count} profile ra file:\n{sfd.FileName}", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggingService?.LogError("System", $"Lỗi khi export profiles: {ex.Message}", ex);
+                MessageBox.Show($"Lỗi khi export profiles: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private static string ToCsv(IEnumerable<string> fields)
+        {
+            return string.Join(",", fields.Select(f =>
+            {
+                var val = f ?? string.Empty;
+                val = val.Replace("\"", "\"\"");
+                return $"\"{val}\"";
+            }));
         }
     }
 }
