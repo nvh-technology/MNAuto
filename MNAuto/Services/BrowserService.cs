@@ -97,6 +97,7 @@ namespace MNAuto.Services
                     var state = await page.EvaluateAsync<string>("() => document.readyState");
                     if (state == "complete" || state == "interactive")
                     {
+                        await WaitUntilNoPreloaderAsync(page, timeoutMs);
                         return;
                     }
                 }
@@ -618,6 +619,7 @@ namespace MNAuto.Services
                 _loggingService?.LogInfo(profile.Name, "Chờ trang load xong");
                 await WaitForExtensionReady(page);
                 await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+                await WaitUntilNoPreloaderAsync(page);
                 await page.WaitForTimeoutAsync(2000);
                 
                 // Điều hướng sang trang assets để đảm bảo hiển thị địa chỉ ví
@@ -1135,6 +1137,7 @@ namespace MNAuto.Services
                     await page.GotoAsync(baseUrl, new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 60000 });
                     await WaitForExtensionReady(page);
                     await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+                    await WaitUntilNoPreloaderAsync(page);
 
                     // Nếu cần, điều hướng tới route qua thay đổi hash client-side
                     if (!string.IsNullOrEmpty(pathSuffix))
@@ -1151,8 +1154,10 @@ namespace MNAuto.Services
                         _loggingService?.LogInfo(profile.Name, $"Điều hướng hash route: {normalized}");
                         // Đổi hash bằng JS để tránh một navigation mới có thể bị block bởi client
                         await page.EvaluateAsync("hash => { try { window.location.hash = hash; } catch(e){} }", normalized);
+                        _loggingService?.LogInfo(profile.Name, "Chờ trang load xong");
                         await WaitForExtensionReady(page);
                         await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+                        await WaitUntilNoPreloaderAsync(page);
                     }
 
                     return true;

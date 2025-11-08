@@ -56,7 +56,7 @@ namespace MNAuto.Services
                     {
                         Name = GenerateUniqueProfileName(existingNames, "Profile"),
                         WalletPassword = GenerateRandomPassword(15),
-                        Status = ProfileStatus.Initializing
+                        Status = ProfileStatus.NotInitialized
                     };
 
                     // Thử chèn, nếu vẫn gặp UNIQUE do race-condition, sinh tên mới và thử lại
@@ -131,6 +131,7 @@ namespace MNAuto.Services
                 if (!contextCreated)
                 {
                     _loggingService.LogError(profile.Name, "Không thể tạo browser context");
+                    await _databaseService.UpdateProfileStatusAsync(profileId, ProfileStatus.InitError);
                     return false;
                 }
 
@@ -139,6 +140,8 @@ namespace MNAuto.Services
                 if (!walletInitialized)
                 {
                     _loggingService.LogError(profile.Name, "Không thể khởi tạo wallet");
+                    await _browserService.CloseBrowserAsync(profileId); // Không thể khởi tạo wallet cũng đóng trình duyệt
+                    await _databaseService.UpdateProfileStatusAsync(profileId, ProfileStatus.InitError);
                     return false;
                 }
 
@@ -149,7 +152,7 @@ namespace MNAuto.Services
                 await _browserService.CloseBrowserAsync(profileId);
                 
                 // Cập nhật trạng thái
-                await _databaseService.UpdateProfileStatusAsync(profileId, ProfileStatus.NotStarted);
+                await _databaseService.UpdateProfileStatusAsync(profileId, ProfileStatus.Initialized);
                 
                 _loggingService.LogInfo(profile.Name, "Khởi tạo trình duyệt thành công");
                 return true;
@@ -157,7 +160,7 @@ namespace MNAuto.Services
             catch (Exception ex)
             {
                 _loggingService.LogError($"Profile{profileId}", "Lỗi khi khởi tạo trình duyệt", ex);
-                await _databaseService.UpdateProfileStatusAsync(profileId, ProfileStatus.Stopped);
+                await _databaseService.UpdateProfileStatusAsync(profileId, ProfileStatus.InitError);
                 return false;
             }
         }

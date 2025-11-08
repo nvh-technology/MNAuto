@@ -195,7 +195,7 @@ namespace MNAuto.Services
             await connection.ExecuteAsync(sql, new { 
                 Id = id, 
                 WalletAddress = walletAddress, 
-                Status = (int)ProfileStatus.NotStarted,
+                Status = (int)ProfileStatus.Initialized,
                 UpdatedAt = DateTime.Now 
             });
         }

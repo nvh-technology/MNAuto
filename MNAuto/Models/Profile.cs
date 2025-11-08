@@ -32,6 +32,11 @@ namespace MNAuto.Models
         NotStarted = 1,      // Chưa khởi động
         Running = 2,         // Đang chạy
         Stopped = 3,         // Đã dừng
-        Mining = 4           // Đang đào ScavengerMine
+        Mining = 4,          // Đang đào ScavengerMine
+
+        // Bổ sung trạng thái cho vòng đời khởi tạo ví
+        NotInitialized = 5,  // Chưa khởi tạo
+        Initialized = 6,     // Đã khởi tạo (có ví/địa chỉ, sẵn sàng chạy)
+        InitError = 7        // Lỗi khởi tạo
     }
 }
