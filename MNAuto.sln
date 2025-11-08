@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36310.24 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MNAuto", "MNAuto\MNAuto.csproj", "{11E1C6FE-1B72-4D81-A9D9-B447DF377098}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ScavengerMineSDK", "MNAuto\ScavengerMineSDK\ScavengerMineSDK.csproj", "{22E1C6FE-1B72-4D81-A9D9-B447DF377099}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{11E1C6FE-1B72-4D81-A9D9-B447DF377098}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{11E1C6FE-1B72-4D81-A9D9-B447DF377098}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{11E1C6FE-1B72-4D81-A9D9-B447DF377098}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{11E1C6FE-1B72-4D81-A9D9-B447DF377098}.Release|Any CPU.Build.0 = Release|Any CPU
+		{22E1C6FE-1B72-4D81-A9D9-B447DF377099}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{22E1C6FE-1B72-4D81-A9D9-B447DF377099}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{22E1C6FE-1B72-4D81-A9D9-B447DF377099}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{22E1C6FE-1B72-4D81-A9D9-B447DF377099}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {4D94AADD-CC4A-41BC-81A8-9059B9CE36FC}
+	EndGlobalSection
+EndGlobal
