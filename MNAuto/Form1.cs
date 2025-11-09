@@ -466,7 +466,7 @@ namespace MNAuto
                     if (results[i]) initializedIds.Add(selectedIds[i]);
                 }
 
-                // Bước 2: Ngay sau khi khởi tạo ví thành công, tự động thực hiện ký/đăng ký giống nút Start Session
+                // Bước 2: Ngay sau khi khởi tạo ví thành công, tự động thực hiện ký/đăng ký 
                 int signedCount = 0;
                 if (initializedIds.Count > 0 && _scavengerMineService != null)
                 {
@@ -524,7 +524,7 @@ namespace MNAuto
                             // Nếu chưa đăng ký thì thực hiện đăng ký (quy trình này bao gồm ký message)
                             if (!profile.IsRegistered)
                             {
-                                _loggingService?.LogInfo(profile.Name, "Đăng ký địa chỉ với ScavengerMine (ký giống Start Session)");
+                                _loggingService?.LogInfo(profile.Name, "Đăng ký địa chỉ với ScavengerMine (ký tự động)");
                                 var registered = await browserService.RegisterAddressAsync(profile, _scavengerMineService);
                                 if (!registered)
                                 {
@@ -632,155 +632,6 @@ namespace MNAuto
             }
         }
 
-        private async void btnStartSession_Click(object sender, EventArgs e)
-        {
-            if (!_isInitialized || _profileManagerService == null || _scavengerMineService == null) return;
-            
-            var selectedIds = GetSelectedProfileIds();
-            if (selectedIds.Count == 0)
-            {
-                MessageBox.Show("Vui lòng chọn ít nhất một profile", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            try
-            {
-                btnStartSession.Enabled = false;
-                _loggingService?.LogInfo("System", $"Bắt đầu Scavenger Session cho {selectedIds.Count} profile");
-                
-                var selectedProfiles = _profiles.Where(p => selectedIds.Contains(p.Id)).ToList();
-                const int maxParallel = 3;
-                var semaphore = new SemaphoreSlim(maxParallel);
-
-                var tasks = selectedProfiles.Select(async profile =>
-                {
-                    await semaphore.WaitAsync();
-                    try
-                    {
-                        _loggingService?.LogInfo(profile.Name, "Bắt đầu Scavenger Session");
-                        
-                        // Kiểm tra xem trình duyệt đã chạy chưa
-                        if (!_profileManagerService.IsProfileRunning(profile.Id))
-                        {
-                            _loggingService?.LogInfo(profile.Name, "Khởi động trình duyệt");
-                            await _profileManagerService.StartProfileAsync(profile.Id);
-                            await Task.Delay(2000); // Chờ trình duyệt khởi động
-                        }
-                        
-                        // Lấy browser service
-                        var browserService = _profileManagerService.GetBrowserService();
-                        if (browserService == null)
-                        {
-                            _loggingService?.LogError(profile.Name, "Không lấy được BrowserService");
-                            return false;
-                        }
-                        
-                        // Đăng ký địa chỉ nếu chưa đăng ký
-                        if (!profile.IsRegistered)
-                        {
-                            _loggingService?.LogInfo(profile.Name, "Đăng ký địa chỉ với ScavengerMine");
-                            var registered = await browserService.RegisterAddressAsync(profile, _scavengerMineService);
-                            
-                            if (!registered)
-                            {
-                                _loggingService?.LogError(profile.Name, "Đăng ký địa chỉ thất bại");
-                                return false;
-                            }
-                            
-                            // Cập nhật database
-                            if (_databaseService != null)
-                            {
-                                await _databaseService.UpdateProfileAsync(profile);
-                            }
-                        }
-                        
-                        // Bắt đầu mining
-                        _loggingService?.LogInfo(profile.Name, "Có thể bắt đầu mining");
-                        // Cập nhật trạng thái sang Mining để UI hiển thị đúng
-                        if (_databaseService != null)
-                        {
-                            await _databaseService.UpdateProfileStatusAsync(profile.Id, ProfileStatus.Mining);
-                        }
-
-                        // Sau khi ký xong và đã bắt đầu MiningWorker, không cần trình duyệt nữa => đóng để giải phóng tài nguyên
-                        try
-                        {
-                            if (_profileManagerService.IsProfileRunning(profile.Id))
-                            {
-                                _loggingService?.LogInfo(profile.Name, "Đóng trình duyệt sau khi bắt đầu mining");
-                                await browserService.CloseBrowserAsync(profile.Id);
-                            }
-                        }
-                        catch (Exception closeEx)
-                        {
-                            _loggingService?.LogWarning(profile.Name, $"Không thể đóng trình duyệt sau khi bắt đầu mining: {closeEx.Message}");
-                        }
-                        return true;
-                        _loggingService?.LogInfo(profile.Name, "Bắt đầu mining");
-                        var miningStarted = await _scavengerMineService.StartMiningAsync(profile, 2); // 2 threads per profile
-                        
-                        if (miningStarted)
-                        {
-                            _loggingService?.LogInfo(profile.Name, "Đã bắt đầu mining thành công");
-
-                            // Cập nhật trạng thái sang Mining để UI hiển thị đúng
-                            if (_databaseService != null)
-                            {
-                                await _databaseService.UpdateProfileStatusAsync(profile.Id, ProfileStatus.Mining);
-                            }
-
-                            // Sau khi ký xong và đã bắt đầu MiningWorker, không cần trình duyệt nữa => đóng để giải phóng tài nguyên
-                            try
-                            {
-                                if (_profileManagerService.IsProfileRunning(profile.Id))
-                                {
-                                    _loggingService?.LogInfo(profile.Name, "Đóng trình duyệt sau khi bắt đầu mining");
-                                    await browserService.CloseBrowserAsync(profile.Id);
-                                }
-                            }
-                            catch (Exception closeEx)
-                            {
-                                _loggingService?.LogWarning(profile.Name, $"Không thể đóng trình duyệt sau khi bắt đầu mining: {closeEx.Message}");
-                            }
-
-                            return true;
-                        }
-                        else
-                        {
-                            _loggingService?.LogError(profile.Name, "Bắt đầu mining thất bại");
-                            return false;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _loggingService?.LogError(profile.Name, $"Lỗi trong Scavenger Session: {ex.Message}", ex);
-                        return false;
-                    }
-                    finally
-                    {
-                        semaphore.Release();
-                    }
-                });
-
-                var results = await Task.WhenAll(tasks);
-                var successCount = results.Count(r => r);
-
-                await LoadProfilesAsync();
-                _loggingService?.LogInfo("System", $"Đã khởi tạo Scavenger Session thành công cho {successCount}/{selectedIds.Count} profile");
-                
-                MessageBox.Show($"Đã khởi tạo Scavenger Session thành công cho {successCount}/{selectedIds.Count} profile",
-                    "Kết quả", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                _loggingService?.LogError("System", $"Lỗi khi khởi tạo Scavenger Session: {ex.Message}", ex);
-                MessageBox.Show($"Lỗi khi khởi tạo Scavenger Session: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            finally
-            {
-                btnStartSession.Enabled = true;
-            }
-        }
 
         // Đã loại bỏ nút "Mở trình duyệt"
 

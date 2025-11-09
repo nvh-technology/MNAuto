@@ -46,7 +46,6 @@
             this.dgvProfiles = new System.Windows.Forms.DataGridView();
             this.btnInitializeSelected = new System.Windows.Forms.Button();
             this.btnStartSelected = new System.Windows.Forms.Button();
-            this.btnStartSession = new System.Windows.Forms.Button();
             // Loại bỏ nút "Mở trình duyệt"
             this.btnCloseSelected = new System.Windows.Forms.Button();
             this.btnDeleteSelected = new System.Windows.Forms.Button();
@@ -134,14 +133,6 @@
             this.btnStartSelected.UseVisualStyleBackColor = true;
             this.btnStartSelected.Click += new System.EventHandler(this.btnStartSelected_Click);
             
-            this.btnStartSession.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
-            this.btnStartSession.Location = new System.Drawing.Point(264, 380);
-            this.btnStartSession.Name = "btnStartSession";
-            this.btnStartSession.Size = new System.Drawing.Size(120, 30);
-            this.btnStartSession.TabIndex = 7;
-            this.btnStartSession.Text = "Start Session";
-            this.btnStartSession.UseVisualStyleBackColor = true;
-            this.btnStartSession.Click += new System.EventHandler(this.btnStartSession_Click);
             
             // Loại bỏ nút "Mở trình duyệt"
             
@@ -220,7 +211,6 @@
             this.Controls.Add(this.dgvProfiles);
             this.Controls.Add(this.btnInitializeSelected);
             this.Controls.Add(this.btnStartSelected);
-            this.Controls.Add(this.btnStartSession);
             // Loại bỏ nút "Mở trình duyệt"
             this.Controls.Add(this.btnCloseSelected);
             this.Controls.Add(this.btnDeleteSelected);
@@ -242,7 +232,6 @@
         private System.Windows.Forms.DataGridView dgvProfiles;
         private System.Windows.Forms.Button btnInitializeSelected;
         private System.Windows.Forms.Button btnStartSelected;
-        private System.Windows.Forms.Button btnStartSession;
         // Loại bỏ nút "Mở trình duyệt"
         private System.Windows.Forms.Button btnCloseSelected;
         private System.Windows.Forms.Button btnDeleteSelected;
