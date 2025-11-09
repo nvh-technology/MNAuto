@@ -157,7 +157,47 @@ namespace MNAuto.Services
             await page.WaitForSelectorAsync(selector, new() { State = WaitForSelectorState.Visible, Timeout = timeoutMs });
             await page.FillAsync(selector, value);
         }
- 
+
+        // Helper: đảm bảo click một lần rồi chờ nút biến mất/disabled để tránh double-click
+        private async Task SafeClickOnceAsync(IPage page, string selector, int timeoutMs = 60000, int postClickWaitMs = 0)
+        {
+            // Đợi UI sẵn sàng và nút hiển thị
+            await WaitUntilNoPreloaderAsync(page, timeoutMs);
+            await page.WaitForSelectorAsync(selector, new() { State = WaitForSelectorState.Visible, Timeout = timeoutMs });
+
+            // Nếu nút đã disabled thì bỏ qua click
+            try
+            {
+                bool disabled = await page.EvaluateAsync<bool>("sel => { const el = document.querySelector(sel); if(!el) return false; return el.getAttribute('disabled') !== null || el.getAttribute('aria-disabled') === 'true' || el.disabled === true; }", selector);
+                if (disabled)
+                {
+                    _loggingService?.LogWarning("BrowserService", $"Bỏ qua click vì nút đã disabled: {selector}");
+                    return;
+                }
+            }
+            catch { /* ignore evaluation errors */ }
+
+            // Click một lần
+            await page.ClickAsync(selector, new() { ClickCount = 1 });
+
+            // Sau click, chờ nút biến mất hoặc disabled để tránh click lần 2
+            try
+            {
+                await page.WaitForFunctionAsync(@"(sel) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return true;
+                    const style = window.getComputedStyle(el);
+                    const hidden = style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
+                    const disabled = el.getAttribute('disabled') !== null || el.getAttribute('aria-disabled') === 'true' || el.disabled === true;
+                    return hidden || disabled;
+                }", selector, new() { Timeout = timeoutMs });
+            }
+            catch { /* nếu không biến mất/disabled kịp thời thì vẫn tiếp tục */ }
+
+            if (postClickWaitMs > 0)
+                await page.WaitForTimeoutAsync(postClickWaitMs);
+        }
+  
         public async Task<bool> CreateBrowserContextAsync(Profile profile, bool headless = false)
         {
             try
@@ -369,7 +409,11 @@ namespace MNAuto.Services
                 // Sau khi vào setup/create: chờ load và kiểm tra ví đã tạo chưa (tránh khởi tạo lại)
                 _loggingService?.LogInfo(profile.Name, "Chờ trang load xong => Kiểm tra ví đã tạo chưa");
                 await WaitForExtensionReady(page);
+                _loggingService?.LogInfo(profile.Name, "Kiểm tra preloader (trước khi xác định trạng thái ví)");
+                var preVisible1 = await IsPreloaderVisibleAsync(page);
+                _loggingService?.LogInfo(profile.Name, $"Preloader visible: {preVisible1}");
                 await WaitUntilNoPreloaderAsync(page);
+                _loggingService?.LogInfo(profile.Name, "Preloader đã biến mất (UI sẵn sàng)");
                 var hasPwd  = !string.IsNullOrWhiteSpace(latestProfile.WalletPassword);
                 var hasRec  = !string.IsNullOrWhiteSpace(latestProfile.RecoveryPhrase);
                 var hasAddr = !string.IsNullOrWhiteSpace(latestProfile.WalletAddress);
@@ -479,9 +523,7 @@ namespace MNAuto.Services
 
                 // Bước 1: Click Next
                 _loggingService?.LogInfo(profile.Name, "Bước 1: Click Next");
-                await WaitForVisibleAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000);
-                await SafeClickAsync(page, "[data-testid='wallet-setup-step-btn-next']");
-                await page.WaitForTimeoutAsync(800);
+                await SafeClickOnceAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000, 800);
 
                 // Bước 2: Copy recovery phrase (không dùng clipboard, vẫn click để theo luồng UI)
                 _loggingService?.LogInfo(profile.Name, "Bước 2: Copy recovery phrase (không đọc clipboard)");
@@ -549,9 +591,7 @@ namespace MNAuto.Services
 
                 // Bước 3: Click Next
                 _loggingService?.LogInfo(profile.Name, "Bước 3: Click Next");
-                await WaitForVisibleAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000);
-                await SafeClickAsync(page, "[data-testid='wallet-setup-step-btn-next']");
-                await page.WaitForTimeoutAsync(800);
+                await SafeClickOnceAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000, 800);
 
                 // Bước 4: Điền recovery phrase vào từng ô (không dùng Paste from clipboard)
                 _loggingService?.LogInfo(profile.Name, "Bước 4: Điền recovery phrase vào 24 ô nhập");
@@ -607,9 +647,7 @@ namespace MNAuto.Services
 
                 // Bước 5: Click Next
                 _loggingService?.LogInfo(profile.Name, "Bước 5: Click Next");
-                await WaitForVisibleAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000);
-                await SafeClickAsync(page, "[data-testid='wallet-setup-step-btn-next']");
-                await page.WaitForTimeoutAsync(800);
+                await SafeClickOnceAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000, 800);
 
                 // Bước 6: Nhập mật khẩu wallet
                 _loggingService?.LogInfo(profile.Name, "Bước 6: Nhập mật khẩu wallet");
@@ -626,7 +664,11 @@ namespace MNAuto.Services
                 _loggingService?.LogInfo(profile.Name, "Chờ trang load xong");
                 await WaitForExtensionReady(page);
                 await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+                _loggingService?.LogInfo(profile.Name, "Kiểm tra preloader trước khi chuyển sang assets");
+                var preVisible2 = await IsPreloaderVisibleAsync(page);
+                _loggingService?.LogInfo(profile.Name, $"Preloader visible: {preVisible2}");
                 await WaitUntilNoPreloaderAsync(page);
+                _loggingService?.LogInfo(profile.Name, "Preloader đã biến mất (sau Open wallet)");
                 await page.WaitForTimeoutAsync(2000);
                 
                 // Điều hướng sang trang assets để đảm bảo hiển thị địa chỉ ví

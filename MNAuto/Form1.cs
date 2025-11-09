@@ -54,13 +54,15 @@ namespace MNAuto
             this.dgvProfiles.VirtualMode = true;
             this.dgvProfiles.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None; // Tắt Auto-Sizing
             this.dgvProfiles.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;      // Tắt Auto row sizing
-            this.dgvProfiles.EditMode = DataGridViewEditMode.EditProgrammatically;      // Không cho sửa trực tiếp
-            this.dgvProfiles.ReadOnly = true;
+            this.dgvProfiles.EditMode = DataGridViewEditMode.EditOnEnter;               // Cho phép edit trực tiếp ô Checkbox
+            this.dgvProfiles.ReadOnly = false;                                          // Các cột dữ liệu sẽ đặt ReadOnly riêng
             this.dgvProfiles.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             this.dgvProfiles.MultiSelect = true;
             this.dgvProfiles.RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.DisableResizing;
             this.dgvProfiles.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
             this.dgvProfiles.CellValueNeeded += new DataGridViewCellValueEventHandler(this.dgvProfiles_CellValueNeeded);
+            this.dgvProfiles.CellValuePushed += new DataGridViewCellValueEventHandler(this.dgvProfiles_CellValuePushed);
+            
 
             // Bật DoubleBuffered cho DataGridView để giảm flicker
             try
@@ -124,9 +126,7 @@ namespace MNAuto
             this.Controls.Add(lblPageSize);
             this.Controls.Add(this.nudPageSize);
 
-            // Gắn thêm sự kiện để ổn định checkbox đơn lẻ (an toàn dù không còn cột Selected)
-            this.dgvProfiles.CellValueChanged += new DataGridViewCellEventHandler(this.dgvProfiles_CellValueChanged);
-            this.dgvProfiles.DataBindingComplete += new DataGridViewBindingCompleteEventHandler(this.dgvProfiles_DataBindingComplete);
+            // VirtualMode đã xử lý Selected qua CellValueNeeded/CellValuePushed, không cần CellValueChanged/DataBindingComplete
 
             InitializeServices();
         }
@@ -225,20 +225,32 @@ namespace MNAuto
                     // Cột Id ẩn để mapping
                     var colId = new DataGridViewTextBoxColumn { Name = "Id", HeaderText = "ID", Visible = false };
 
+                    // Cột checkbox chọn hồ sơ
+                    var colSelected = new DataGridViewCheckBoxColumn
+                    {
+                        Name = "Selected",
+                        HeaderText = "",
+                        Width = 40,
+                        AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+                        ThreeState = false
+                    };
+
                     // 5 cột yêu cầu
                     var colName = new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "Tên Profile", Width = 180, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
                     var colWallet = new DataGridViewTextBoxColumn { Name = "WalletAddress", HeaderText = "Địa chỉ Wallet", Width = 260, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
                     var colRecovery = new DataGridViewTextBoxColumn { Name = "RecoveryPhrase", HeaderText = "Recovery Phrase", Width = 300, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
                     var colPwd = new DataGridViewTextBoxColumn { Name = "WalletPassword", HeaderText = "Mật khẩu", Width = 150, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
-                    var colStatus = new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng thái", Width = 120, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    var colStatus = new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng thái ví", Width = 120, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
 
-                    this.dgvProfiles.Columns.AddRange(new DataGridViewColumn[] { colId, colName, colWallet, colRecovery, colPwd, colStatus });
+                    this.dgvProfiles.Columns.AddRange(new DataGridViewColumn[] { colId, colSelected, colName, colWallet, colRecovery, colPwd, colStatus });
 
                     foreach (DataGridViewColumn col in this.dgvProfiles.Columns)
                     {
                         col.SortMode = DataGridViewColumnSortMode.NotSortable;
                         col.ReadOnly = true;
                     }
+                    // Cho phép chỉnh sửa cột Selected (checkbox)
+                    colSelected.ReadOnly = false;
 
                     _gridInitialized = true;
                 }
@@ -272,6 +284,22 @@ namespace MNAuto
                 ProfileStatus.Mining => "Đang đào",
                 _ => "Không xác định"
             };
+        }
+
+        // Trạng thái ví đúng theo yêu cầu: "Chưa khởi tạo", "Đang khởi tạo", "Chưa Ký", "Thành công"
+        private string GetWalletStatusText(Profile p)
+        {
+            // Ưu tiên hiển thị "Đang khởi tạo" khi đang trong quá trình khởi tạo ví
+            if (p.Status == ProfileStatus.Initializing) return "Đang khởi tạo";
+
+            // Chưa có địa chỉ ví => Chưa khởi tạo
+            if (string.IsNullOrWhiteSpace(p.WalletAddress)) return "Chưa khởi tạo";
+
+            // Có ví nhưng chưa ký/đăng ký => Chưa Ký
+            if (string.IsNullOrWhiteSpace(p.Signature) || !p.IsRegistered) return "Chưa Ký";
+
+            // Đã ký và đăng ký thành công
+            return "Thành công";
         }
 
         private string GetNextChallengeText(string code, Challenge? challenge)
@@ -427,18 +455,141 @@ namespace MNAuto
                 btnInitializeSelected.Enabled = false;
                 _loggingService?.LogInfo("System", $"Bắt đầu khởi tạo {selectedIds.Count} profile");
                 
+                // Bước 1: Khởi tạo ví cho các profile đã chọn
                 var results = await _profileManagerService.InitializeMultipleProfilesAsync(selectedIds);
-                var successCount = results.Count(r => r);
-                
+                var initSuccessCount = results.Count(r => r);
+
+                // Xác định danh sách ID đã khởi tạo thành công (giữ thứ tự theo selectedIds)
+                var initializedIds = new List<int>();
+                for (int i = 0; i < selectedIds.Count && i < results.Count; i++)
+                {
+                    if (results[i]) initializedIds.Add(selectedIds[i]);
+                }
+
+                // Bước 2: Ngay sau khi khởi tạo ví thành công, tự động thực hiện ký/đăng ký giống nút Start Session
+                int signedCount = 0;
+                if (initializedIds.Count > 0 && _scavengerMineService != null)
+                {
+                    _loggingService?.LogInfo("System", $"Bắt đầu ký/đăng ký tự động cho {initializedIds.Count} profile sau khi khởi tạo ví");
+
+                    // Lấy danh sách profile mới nhất từ DB để đảm bảo thông tin ví đã được cập nhật
+                    var profilesForSigning = new List<Profile>();
+                    if (_databaseService != null)
+                    {
+                        foreach (var pid in initializedIds)
+                        {
+                            try
+                            {
+                                var p = await _databaseService.GetProfileAsync(pid);
+                                if (p != null) profilesForSigning.Add(p);
+                            }
+                            catch (Exception exGet)
+                            {
+                                _loggingService?.LogWarning($"Profile {pid}", $"Không thể tải profile từ DB để ký: {exGet.Message}");
+                            }
+                        }
+                    }
+
+                    // Giới hạn song song 3 để an toàn
+                    const int maxParallel = 3;
+                    var semaphore = new SemaphoreSlim(maxParallel);
+                    var tasks = profilesForSigning.Select(async profile =>
+                    {
+                        await semaphore.WaitAsync();
+                        try
+                        {
+                            _loggingService?.LogInfo(profile.Name, "Tự động ký & đăng ký với ScavengerMine sau khi khởi tạo ví");
+
+                            // Đảm bảo trình duyệt đang chạy (cần context cho quy trình ký)
+                            if (!_profileManagerService.IsProfileRunning(profile.Id))
+                            {
+                                _loggingService?.LogInfo(profile.Name, "Khởi động trình duyệt để ký message");
+                                var started = await _profileManagerService.StartProfileAsync(profile.Id, headless: false);
+                                if (!started)
+                                {
+                                    _loggingService?.LogError(profile.Name, "Không thể khởi động trình duyệt để ký");
+                                    return false;
+                                }
+                                await Task.Delay(1500);
+                            }
+
+                            // Lấy BrowserService
+                            var browserService = _profileManagerService.GetBrowserService();
+                            if (browserService == null)
+                            {
+                                _loggingService?.LogError(profile.Name, "Không lấy được BrowserService");
+                                return false;
+                            }
+
+                            // Nếu chưa đăng ký thì thực hiện đăng ký (quy trình này bao gồm ký message)
+                            if (!profile.IsRegistered)
+                            {
+                                _loggingService?.LogInfo(profile.Name, "Đăng ký địa chỉ với ScavengerMine (ký giống Start Session)");
+                                var registered = await browserService.RegisterAddressAsync(profile, _scavengerMineService);
+                                if (!registered)
+                                {
+                                    _loggingService?.LogError(profile.Name, "Đăng ký địa chỉ thất bại");
+                                    return false;
+                                }
+
+                                // Cập nhật DB với PublicKey/Signature/IsRegistered/WorkerId...
+                                if (_databaseService != null)
+                                {
+                                    await _databaseService.UpdateProfileAsync(profile);
+                                }
+                            }
+
+                            // Đóng trình duyệt để giải phóng tài nguyên (không tự động bắt đầu mining ở đây)
+                            try
+                            {
+                                if (_profileManagerService.IsProfileRunning(profile.Id))
+                                {
+                                    _loggingService?.LogInfo(profile.Name, "Đóng trình duyệt sau khi ký/đăng ký");
+                                    await browserService.CloseBrowserAsync(profile.Id);
+                                }
+                            }
+                            catch (Exception closeEx)
+                            {
+                                _loggingService?.LogWarning(profile.Name, $"Không thể đóng trình duyệt sau khi ký: {closeEx.Message}");
+                            }
+
+                            return true;
+                        }
+                        catch (Exception exSign)
+                        {
+                            _loggingService?.LogError(profile.Name, $"Lỗi trong bước ký/đăng ký sau khởi tạo: {exSign.Message}", exSign);
+                            return false;
+                        }
+                        finally
+                        {
+                            semaphore.Release();
+                        }
+                    });
+
+                    var signResults = await Task.WhenAll(tasks);
+                    signedCount = signResults.Count(r => r);
+                }
+
+                // Làm mới danh sách sau khi hoàn tất cả hai bước
                 await LoadProfilesAsync();
-                _loggingService?.LogInfo("System", $"Đã khởi tạo thành công {successCount}/{selectedIds.Count} profile");
-                
-                MessageBox.Show($"Đã khởi tạo thành công {successCount}/{selectedIds.Count} profile", "Kết quả", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                // Ghi log và hiển thị kết quả tổng hợp
+                _loggingService?.LogInfo("System", $"Đã khởi tạo thành công {initSuccessCount}/{selectedIds.Count} profile");
+                if (initializedIds.Count > 0)
+                {
+                    _loggingService?.LogInfo("System", $"Đã ký/đăng ký thành công {signedCount}/{initializedIds.Count} profile sau khi khởi tạo");
+                }
+
+                var msg = new StringBuilder();
+                msg.AppendLine($"Khởi tạo ví: {initSuccessCount}/{selectedIds.Count} profile thành công.");
+                if (initializedIds.Count > 0)
+                    msg.AppendLine($"Ký/Đăng ký: {signedCount}/{initializedIds.Count} profile thành công.");
+                MessageBox.Show(msg.ToString(), "Kết quả", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                _loggingService?.LogError("System", $"Lỗi khi khởi tạo profiles: {ex.Message}");
-                MessageBox.Show($"Lỗi khi khởi tạo profiles: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                _loggingService?.LogError("System", $"Lỗi khi khởi tạo/ ký profiles: {ex.Message}");
+                MessageBox.Show($"Lỗi khi khởi tạo/ ký profiles: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -699,18 +850,50 @@ namespace MNAuto
                         {
                             await _profileManagerService.CloseProfileAsync(profileId);
                         }
-                        
+
                         // Xóa profile khỏi database
                         if (_databaseService != null)
                         {
                             await _databaseService.DeleteProfileAsync(profileId);
                         }
-                        
+
+                        // Xóa dữ liệu thư mục ProfileData tương ứng (hỗ trợ cả tên mới và legacy)
+                        var baseDir = AppContext.BaseDirectory;
+                        var profileRoot = System.IO.Path.Combine(baseDir, "ProfileData");
+                        var dirNew = System.IO.Path.Combine(profileRoot, $"Profile {profileId}");
+                        var dirLegacy = System.IO.Path.Combine(profileRoot, $"Profile_{profileId}");
+
+                        try
+                        {
+                            if (System.IO.Directory.Exists(dirNew))
+                            {
+                                System.IO.Directory.Delete(dirNew, true);
+                                _loggingService?.LogInfo("System", $"Đã xóa thư mục dữ liệu: {dirNew}");
+                            }
+                        }
+                        catch (Exception exDirNew)
+                        {
+                            _loggingService?.LogWarning("System", $"Không thể xóa thư mục {dirNew}: {exDirNew.Message}");
+                        }
+
+                        try
+                        {
+                            if (System.IO.Directory.Exists(dirLegacy))
+                            {
+                                System.IO.Directory.Delete(dirLegacy, true);
+                                _loggingService?.LogInfo("System", $"Đã xóa thư mục dữ liệu (legacy): {dirLegacy}");
+                            }
+                        }
+                        catch (Exception exDirLegacy)
+                        {
+                            _loggingService?.LogWarning("System", $"Không thể xóa thư mục {dirLegacy}: {exDirLegacy.Message}");
+                        }
+
                         // Xóa khỏi danh sách hiện tại
                         _profiles.RemoveAll(p => p.Id == profileId);
-                        
+
                         successCount++;
-                        _loggingService?.LogInfo("System", $"Đã xóa profile ID: {profileId}");
+                        _loggingService?.LogInfo("System", $"Đã xóa profile ID: {profileId} kèm dữ liệu ProfileData");
                     }
                     catch (Exception ex)
                     {
@@ -747,29 +930,23 @@ namespace MNAuto
 
         private void chkSelectAll_CheckedChanged(object sender, EventArgs e)
         {
-            if (dgvProfiles.Rows.Count == 0) return;
-
             bool selectAll = chkSelectAll.Checked;
-            foreach (DataGridViewRow row in dgvProfiles.Rows)
+
+            // Áp dụng cho toàn bộ danh sách profile
+            _selectedProfileIds.Clear();
+            if (selectAll && _profiles != null)
             {
-                row.Selected = selectAll;
+                foreach (var p in _profiles)
+                    _selectedProfileIds.Add(p.Id);
             }
+
+            // Làm mới hiển thị checkbox
+            dgvProfiles.Invalidate();
         }
 
         private List<int> GetSelectedProfileIds()
         {
-            var result = new List<int>();
-            if (_profiles == null || _profiles.Count == 0) return result;
-
-            int startIndex = (_currentPage - 1) * _pageSize;
-
-            foreach (DataGridViewRow row in dgvProfiles.SelectedRows)
-            {
-                int index = startIndex + row.Index;
-                if (index >= 0 && index < _profiles.Count)
-                    result.Add(_profiles[index].Id);
-            }
-
+            var result = _selectedProfileIds?.ToList() ?? new List<int>();
             result.Sort();
             return result;
         }
@@ -936,14 +1113,39 @@ namespace MNAuto
 
             switch (colName)
             {
+                case "Selected": e.Value = _selectedProfileIds.Contains(p.Id); break;
                 case "Id": e.Value = p.Id; break;
                 case "Name": e.Value = p.Name; break;
                 case "WalletAddress": e.Value = p.WalletAddress; break;
                 case "RecoveryPhrase": e.Value = p.RecoveryPhrase; break;
                 case "WalletPassword": e.Value = p.WalletPassword; break;
-                case "Status": e.Value = GetStatusText(p.Status); break;
+                case "Status": e.Value = GetWalletStatusText(p); break;
                 default: e.Value = null; break;
             }
+        }
+
+        // Cập nhật dữ liệu khi người dùng chỉnh checkbox (VirtualMode)
+        private void dgvProfiles_CellValuePushed(object? sender, DataGridViewCellValueEventArgs e)
+        {
+            try
+            {
+                if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+                var colName = dgvProfiles.Columns[e.ColumnIndex].Name;
+                if (colName != "Selected") return;
+
+                int startIndex = (_currentPage - 1) * _pageSize;
+                int index = startIndex + e.RowIndex;
+                if (index < 0 || index >= _profiles.Count) return;
+
+                var id = _profiles[index].Id;
+                bool isChecked = e.Value is bool b && b;
+
+                if (isChecked)
+                    _selectedProfileIds.Add(id);
+                else
+                    _selectedProfileIds.Remove(id);
+            }
+            catch { /* ignore */ }
         }
 
         // Sự kiện phân trang

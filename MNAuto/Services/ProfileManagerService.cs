@@ -345,6 +345,64 @@ namespace MNAuto.Services
             return candidate;
         }
 
+        public async Task<bool> DeleteProfileAsync(int profileId)
+        {
+            try
+            {
+                // Lấy thông tin để log
+                var profile = await _databaseService.GetProfileAsync(profileId);
+                var profileName = profile?.Name ?? $"Profile {profileId}";
+
+                // Đóng trình duyệt nếu đang chạy
+                if (_browserService != null && _browserService.IsBrowserRunning(profileId))
+                {
+                    await _browserService.CloseBrowserAsync(profileId);
+                }
+
+                // Xóa dữ liệu thư mục ProfileData tương ứng
+                var baseDir = AppContext.BaseDirectory;
+                var profileRoot = System.IO.Path.Combine(baseDir, "ProfileData");
+                var dirNew = System.IO.Path.Combine(profileRoot, $"Profile {profileId}");
+                var dirLegacy = System.IO.Path.Combine(profileRoot, $"Profile_{profileId}");
+
+                try
+                {
+                    if (System.IO.Directory.Exists(dirNew))
+                    {
+                        System.IO.Directory.Delete(dirNew, true);
+                        _loggingService.LogInfo(profileName, $"Đã xóa thư mục dữ liệu: {dirNew}");
+                    }
+                }
+                catch (Exception exDirNew)
+                {
+                    _loggingService.LogWarning(profileName, $"Không thể xóa thư mục {dirNew}: {exDirNew.Message}");
+                }
+
+                try
+                {
+                    if (System.IO.Directory.Exists(dirLegacy))
+                    {
+                        System.IO.Directory.Delete(dirLegacy, true);
+                        _loggingService.LogInfo(profileName, $"Đã xóa thư mục dữ liệu (legacy): {dirLegacy}");
+                    }
+                }
+                catch (Exception exDirLegacy)
+                {
+                    _loggingService.LogWarning(profileName, $"Không thể xóa thư mục {dirLegacy}: {exDirLegacy.Message}");
+                }
+
+                // Xóa hồ sơ khỏi database
+                await _databaseService.DeleteProfileAsync(profileId);
+
+                _loggingService.LogInfo("System", $"Đã xóa profile ID: {profileId} kèm dữ liệu ProfileData");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogError("System", $"Lỗi khi xóa profile {profileId}", ex);
+                return false;
+            }
+        }
         public async Task DisposeAsync()
         {
             try
