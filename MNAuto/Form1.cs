@@ -14,6 +14,7 @@ using System.IO;
 using System.Text;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using ClosedXML.Excel;
 
 namespace MNAuto
 {
@@ -904,22 +905,36 @@ namespace MNAuto
 
                 using (var sfd = new SaveFileDialog())
                 {
-                    sfd.Filter = "CSV (Comma delimited) (*.csv)|*.csv";
-                    sfd.FileName = $"profiles_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+                    sfd.Filter = "Excel Workbook (*.xlsx)|*.xlsx";
+                    sfd.FileName = $"profiles_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
                     if (sfd.ShowDialog() != DialogResult.OK) return;
 
-                    var sb = new StringBuilder();
-                    // Header
-                    sb.AppendLine(ToCsv(new[] { "Tên profile", "WalletAddress", "WalletPassword", "RecoveryPhrase" }));
-                    // Rows
-                    foreach (var p in profiles)
+                    using (var wb = new XLWorkbook())
                     {
-                        sb.AppendLine(ToCsv(new[] { p.Name, p.WalletAddress, p.WalletPassword, p.RecoveryPhrase }));
-                    }
+                        var ws = wb.Worksheets.Add("Profiles");
 
-                    // Viết file với BOM để Excel hiển thị Unicode tiếng Việt đúng
-                    var utf8WithBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
-                    File.WriteAllText(sfd.FileName, sb.ToString(), utf8WithBom);
+                        // Header
+                        ws.Cell(1, 1).Value = "Tên profile";
+                        ws.Cell(1, 2).Value = "WalletAddress";
+                        ws.Cell(1, 3).Value = "WalletPassword";
+                        ws.Cell(1, 4).Value = "RecoveryPhrase";
+
+                        // Rows
+                        int row = 2;
+                        foreach (var p in profiles)
+                        {
+                            ws.Cell(row, 1).Value = p.Name ?? string.Empty;
+                            ws.Cell(row, 2).Value = p.WalletAddress ?? string.Empty;
+                            ws.Cell(row, 3).Value = p.WalletPassword ?? string.Empty;
+                            ws.Cell(row, 4).Value = p.RecoveryPhrase ?? string.Empty;
+                            row++;
+                        }
+
+                        // Auto-fit columns for better readability
+                        ws.Columns(1, 4).AdjustToContents();
+
+                        wb.SaveAs(sfd.FileName);
+                    }
 
                     MessageBox.Show($"Đã export {profiles.Count} profile ra file:\n{sfd.FileName}", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
