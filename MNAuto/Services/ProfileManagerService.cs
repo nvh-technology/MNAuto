@@ -38,10 +38,17 @@ namespace MNAuto.Services
             }
         }
 
-        public async Task<List<Profile>> CreateProfilesAsync(int count)
+        public async Task<List<Profile>> CreateProfilesAsync(int count, string walletPassword)
         {
+            if (string.IsNullOrWhiteSpace(walletPassword))
+                throw new ArgumentException("Vui lòng nhập mật khẩu ví hợp lệ", nameof(walletPassword));
+            // Validate: tối thiểu 8 ký tự và có cả số lẫn chữ
+            bool hasLetter = walletPassword.Any(char.IsLetter);
+            bool hasDigit = walletPassword.Any(char.IsDigit);
+            if (walletPassword.Length < 8 || !hasLetter || !hasDigit)
+                throw new ArgumentException("Mật khẩu phải tối thiểu 8 ký tự và bao gồm cả số và chữ", nameof(walletPassword));
             var profiles = new List<Profile>();
-            
+             
             try
             {
                 _loggingService.LogInfo("System", $"Bắt đầu tạo {count} profile mới");
@@ -53,7 +60,7 @@ namespace MNAuto.Services
                     var profile = new Profile
                     {
                         Name = $"tmp-{Guid.NewGuid():N}",
-                        WalletPassword = GenerateRandomPassword(15),
+                        WalletPassword = walletPassword,
                         Status = ProfileStatus.NotInitialized
                     };
 

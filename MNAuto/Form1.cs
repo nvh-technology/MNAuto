@@ -371,13 +371,28 @@ namespace MNAuto
                 MessageBox.Show("Vui lòng nhập số lượng profile hợp lệ", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
+            // Lấy mật khẩu ví từ ô nhập và kiểm tra
+            var pwd = txtWalletPassword?.Text?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(pwd))
+            {
+                MessageBox.Show("Vui lòng nhập mật khẩu ví", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            // Ràng buộc: tối thiểu 8 ký tự và chứa cả số lẫn chữ
+            bool hasLetter = pwd.Any(char.IsLetter);
+            bool hasDigit = pwd.Any(char.IsDigit);
+            if (pwd.Length < 8 || !hasLetter || !hasDigit)
+            {
+                MessageBox.Show("Mật khẩu phải tối thiểu 8 ký tự và bao gồm cả số và chữ", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
 
             try
             {
                 btnCreateProfiles.Enabled = false;
                 _loggingService?.LogInfo("System", $"Bắt đầu tạo {count} profile mới");
                 
-                var newProfiles = await _profileManagerService.CreateProfilesAsync(count);
+                var newProfiles = await _profileManagerService.CreateProfilesAsync(count, pwd);
                 _profiles.AddRange(newProfiles);
                 
                 RefreshProfileList();

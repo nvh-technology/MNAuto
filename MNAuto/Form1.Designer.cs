@@ -39,6 +39,8 @@
             // Tạo các controls
             this.lblProfileCount = new System.Windows.Forms.Label();
             this.txtProfileCount = new System.Windows.Forms.TextBox();
+            this.lblWalletPassword = new System.Windows.Forms.Label();
+            this.txtWalletPassword = new System.Windows.Forms.TextBox();
             this.btnCreateProfiles = new System.Windows.Forms.Button();
             this.chkSelectAll = new System.Windows.Forms.CheckBox();
             this.dgvProfiles = new System.Windows.Forms.DataGridView();
@@ -68,7 +70,19 @@
             this.txtProfileCount.TabIndex = 1;
             this.txtProfileCount.Text = "5";
             
-            this.btnCreateProfiles.Location = new System.Drawing.Point(242, 11);
+            // Mật khẩu ví
+            this.lblWalletPassword.AutoSize = true;
+            this.lblWalletPassword.Location = new System.Drawing.Point(260, 15);
+            this.lblWalletPassword.Name = "lblWalletPassword";
+            this.lblWalletPassword.Text = "Mật khẩu ví:";
+            
+            this.txtWalletPassword.Location = new System.Drawing.Point(360, 12);
+            this.txtWalletPassword.Name = "txtWalletPassword";
+            this.txtWalletPassword.Size = new System.Drawing.Size(180, 23);
+            this.txtWalletPassword.UseSystemPasswordChar = false;
+
+            // Nút tạo profile (dịch sang phải sau ô mật khẩu)
+            this.btnCreateProfiles.Location = new System.Drawing.Point(560, 11);
             this.btnCreateProfiles.Name = "btnCreateProfiles";
             this.btnCreateProfiles.Size = new System.Drawing.Size(120, 25);
             this.btnCreateProfiles.TabIndex = 2;
@@ -199,6 +213,8 @@
             // Thêm controls vào form
             this.Controls.Add(this.lblProfileCount);
             this.Controls.Add(this.txtProfileCount);
+            this.Controls.Add(this.lblWalletPassword);
+            this.Controls.Add(this.txtWalletPassword);
             this.Controls.Add(this.btnCreateProfiles);
             this.Controls.Add(this.chkSelectAll);
             this.Controls.Add(this.dgvProfiles);
@@ -219,6 +235,8 @@
 
         private System.Windows.Forms.Label lblProfileCount;
         private System.Windows.Forms.TextBox txtProfileCount;
+        private System.Windows.Forms.Label lblWalletPassword;
+        private System.Windows.Forms.TextBox txtWalletPassword;
         private System.Windows.Forms.Button btnCreateProfiles;
         private System.Windows.Forms.CheckBox chkSelectAll;
         private System.Windows.Forms.DataGridView dgvProfiles;
