@@ -502,6 +502,27 @@ namespace MNAuto
                         }
                         
                         // Bắt đầu mining
+                        _loggingService?.LogInfo(profile.Name, "Có thể bắt đầu mining");
+                        // Cập nhật trạng thái sang Mining để UI hiển thị đúng
+                        if (_databaseService != null)
+                        {
+                            await _databaseService.UpdateProfileStatusAsync(profile.Id, ProfileStatus.Mining);
+                        }
+
+                        // Sau khi ký xong và đã bắt đầu MiningWorker, không cần trình duyệt nữa => đóng để giải phóng tài nguyên
+                        try
+                        {
+                            if (_profileManagerService.IsProfileRunning(profile.Id))
+                            {
+                                _loggingService?.LogInfo(profile.Name, "Đóng trình duyệt sau khi bắt đầu mining");
+                                await browserService.CloseBrowserAsync(profile.Id);
+                            }
+                        }
+                        catch (Exception closeEx)
+                        {
+                            _loggingService?.LogWarning(profile.Name, $"Không thể đóng trình duyệt sau khi bắt đầu mining: {closeEx.Message}");
+                        }
+                        return true;
                         _loggingService?.LogInfo(profile.Name, "Bắt đầu mining");
                         var miningStarted = await _scavengerMineService.StartMiningAsync(profile, 2); // 2 threads per profile
                         
