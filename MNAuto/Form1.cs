@@ -12,6 +12,8 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.IO;
 using System.Text;
+using System.Reflection;
+using System.Runtime.InteropServices;
 
 namespace MNAuto
 {
@@ -25,6 +27,18 @@ namespace MNAuto
         private HashSet<int> _selectedProfileIds = new HashSet<int>();
         private bool _isInitialized = false;
 
+        // Paging/Virtual mode
+        private int _pageSize = 100;
+        private int _currentPage = 1;
+        private int _totalPages = 1;
+        private bool _gridInitialized = false;
+
+        // UI paging controls
+        private Button? btnPrevPage;
+        private Button? btnNextPage;
+        private Label? lblPageInfo;
+        private NumericUpDown? nudPageSize;
+
         // Trạng thái challenge toàn cục & kết quả giải gần nhất
         private string _currentChallengeCode = "unknown";
         private string _nextChallengeInText = string.Empty;
@@ -35,9 +49,85 @@ namespace MNAuto
         public Form1()
         {
             InitializeComponent();
-            // Gắn thêm sự kiện để ổn định checkbox đơn lẻ
+
+            // DataGridView performance tuning
+            this.dgvProfiles.VirtualMode = true;
+            this.dgvProfiles.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None; // Tắt Auto-Sizing
+            this.dgvProfiles.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;      // Tắt Auto row sizing
+            this.dgvProfiles.EditMode = DataGridViewEditMode.EditProgrammatically;      // Không cho sửa trực tiếp
+            this.dgvProfiles.ReadOnly = true;
+            this.dgvProfiles.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            this.dgvProfiles.MultiSelect = true;
+            this.dgvProfiles.RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.DisableResizing;
+            this.dgvProfiles.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+            this.dgvProfiles.CellValueNeeded += new DataGridViewCellValueEventHandler(this.dgvProfiles_CellValueNeeded);
+
+            // Bật DoubleBuffered cho DataGridView để giảm flicker
+            try
+            {
+                typeof(DataGridView).InvokeMember("DoubleBuffered",
+                    BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.SetProperty,
+                    null, this.dgvProfiles, new object[] { true });
+            }
+            catch { /* fallback if reflection not permitted */ }
+
+            // Tạo controls phân trang (Paging)
+            this.lblPageInfo = new Label
+            {
+                AutoSize = true,
+                Text = "Trang 1/1",
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Location = new Point(this.ClientSize.Width - 380, 45)
+            };
+
+            this.btnPrevPage = new Button
+            {
+                Text = "<",
+                Size = new Size(30, 24),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Location = new Point(this.ClientSize.Width - 220, 43)
+            };
+            this.btnPrevPage.Click += new EventHandler(this.btnPrevPage_Click);
+
+            this.btnNextPage = new Button
+            {
+                Text = ">",
+                Size = new Size(30, 24),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Location = new Point(this.ClientSize.Width - 185, 43)
+            };
+            this.btnNextPage.Click += new EventHandler(this.btnNextPage_Click);
+
+            this.nudPageSize = new NumericUpDown
+            {
+                Minimum = 10,
+                Maximum = 100000,
+                Value = 100,
+                Increment = 10,
+                Size = new Size(70, 23),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Location = new Point(this.ClientSize.Width - 100, 44)
+            };
+            this.nudPageSize.ValueChanged += new EventHandler(this.nudPageSize_ValueChanged);
+
+            var lblPageSize = new Label
+            {
+                Text = "Page size:",
+                AutoSize = true,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Location = new Point(this.ClientSize.Width - 170, 47)
+            };
+
+            this.Controls.Add(this.lblPageInfo);
+            this.Controls.Add(this.btnPrevPage);
+            this.Controls.Add(this.btnNextPage);
+            this.Controls.Add(lblPageSize);
+            this.Controls.Add(this.nudPageSize);
+
+            // Gắn thêm sự kiện để ổn định checkbox đơn lẻ (an toàn dù không còn cột Selected)
             this.dgvProfiles.CellValueChanged += new DataGridViewCellEventHandler(this.dgvProfiles_CellValueChanged);
             this.dgvProfiles.DataBindingComplete += new DataGridViewBindingCompleteEventHandler(this.dgvProfiles_DataBindingComplete);
+
             InitializeServices();
         }
 
@@ -49,6 +139,9 @@ namespace MNAuto
                 _loggingService = new LoggingService();
                 _profileManagerService = new ProfileManagerService(_databaseService, _loggingService);
                 _scavengerMineService = new ScavengerMineService(_loggingService, _databaseService);
+                
+                // Đồng bộ tên profile theo Id để khớp "Profile {Id}" với thư mục ProfileData
+                await _databaseService.NormalizeProfileNamesAsync();
                 
                 await _profileManagerService.InitializeAsync();
                 
@@ -103,135 +196,69 @@ namespace MNAuto
                 return;
             }
 
-            // Đồng bộ _selectedProfileIds trước khi refresh từ trạng thái hiện tại của lưới
-            var idsToAdd = new List<int>();
-            var idsToRemove = new List<int>();
-            foreach (DataGridViewRow row in dgvProfiles.Rows)
+            // Cập nhật page size từ UI (nếu có)
+            if (nudPageSize != null && nudPageSize.Value > 0)
+                _pageSize = (int)nudPageSize.Value;
+
+            var total = _profiles?.Count ?? 0;
+            _totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)_pageSize));
+            if (_currentPage > _totalPages) _currentPage = _totalPages;
+            if (_currentPage < 1) _currentPage = 1;
+
+            int startIndex = (_currentPage - 1) * _pageSize;
+            int rows = Math.Max(0, Math.Min(_pageSize, total - startIndex));
+
+            // Tắt redraw khi cập nhật lưới
+            using (new RedrawScope(this.dgvProfiles))
             {
-                if (row.Cells["Id"].Value == null) continue;
-                var id = (int)row.Cells["Id"].Value;
-                var isChecked = row.Cells["Selected"].Value is bool b && b;
-                if (isChecked) idsToAdd.Add(id); else idsToRemove.Add(id);
-            }
-            foreach (var id in idsToAdd) _selectedProfileIds.Add(id);
-            foreach (var id in idsToRemove) _selectedProfileIds.Remove(id);
+                this.dgvProfiles.SuspendLayout();
 
-            dgvProfiles.DataSource = null;
-            dgvProfiles.DataSource = _profiles.Select(p => new
-            {
-                p.Id,
-                p.Name,
-                p.NightTokens,
-                p.WalletAddress,
-                // Trạng thái tổng quát của profile
-                Status = GetStatusText(p.Status),
-                IsRegistered = p.IsRegistered ? "Đã đăng ký" : "Chưa đăng ký",
-                SolutionsFound = p.SolutionsFound,
-                TotalHashes = p.TotalHashes,
+                // Không sử dụng DataSource khi VirtualMode
+                if (this.dgvProfiles.DataSource != null)
+                    this.dgvProfiles.DataSource = null;
 
-                // Theo ảnh tham chiếu - khối Miner status
-                MinerStatus = _challengeSummary.MinerStatusLabel,                                  // ACTIVE/INACTIVE
-                CurrentChallenge = _challengeSummary.CurrentChallengeId,                           // 218
-                FindingStatus = p.IsMining ? "Finding a solution..." : "Idle",                     // Status
-                TimeSpent = _scavengerMineService != null ? _scavengerMineService.GetMiningElapsedText(p.Id) : "00:00:00",
-                DifficultyCategory = _challengeSummary.DifficultyCategory,                         // Easy/Medium/Hard
-
-                // Theo ảnh tham chiếu - khối Day / Next challenge / Counters
-                Day = _challengeSummary.Day,
-                ChallengeNumber = _challengeSummary.ChallengeNumber,
-                NextChallengeIn = _challengeSummary.NextChallengeInText,
-                LatestSubmissionAge = _challengeSummary.LatestSubmissionAge,
-
-                // Difficulty chi tiết
-                DifficultyBits = _challengeSummary.DifficultyBits,
-                DifficultyHexShort = string.IsNullOrWhiteSpace(_challengeSummary.DifficultyHex)
-                    ? ""
-                    : (_challengeSummary.DifficultyHex.Length > 10
-                        ? _challengeSummary.DifficultyHex.Substring(0, 10) + "…"
-                        : _challengeSummary.DifficultyHex),
-
-                // Challenge Availability theo code
-                ChallengeAvailable = _currentChallengeCode == "active" ? "Yes" : "No",
-
-                // Counters tham chiếu (xấp xỉ theo dữ liệu cục bộ)
-                AllEvents = p.SolutionsFound + (p.IsMining ? 1 : 0),
-                SolvedCount = p.SolutionsFound,
-                UnsolvedCount = (_lastSolveSuccess.TryGetValue(p.Id, out var okLast) && !okLast) ? 1 : 0,
-
-                // Giữ cột cũ để tương thích
-                IsMining = p.IsMining ? "Đang đào" : "Không",
-                p.CreatedAt
-            }).ToList();
-
-            // Cấu hình cột
-            dgvProfiles.Columns["Id"].HeaderText = "ID";
-            dgvProfiles.Columns["Name"].HeaderText = "Tên Profile";
-            dgvProfiles.Columns["NightTokens"].HeaderText = "NIGHT Tokens";
-            dgvProfiles.Columns["WalletAddress"].HeaderText = "Địa chỉ Wallet";
-
-            // Khối trạng thái profile cơ bản
-            dgvProfiles.Columns["Status"].HeaderText = "Trạng thái";
-            dgvProfiles.Columns["IsRegistered"].HeaderText = "Đăng ký SM";
-            dgvProfiles.Columns["SolutionsFound"].HeaderText = "Solutions";
-            dgvProfiles.Columns["TotalHashes"].HeaderText = "Total Hashes";
-
-            // Khối Miner status theo ảnh tham chiếu
-            dgvProfiles.Columns["MinerStatus"].HeaderText = "Miner status";
-            dgvProfiles.Columns["CurrentChallenge"].HeaderText = "Current challenge";
-            dgvProfiles.Columns["FindingStatus"].HeaderText = "Status";
-            dgvProfiles.Columns["TimeSpent"].HeaderText = "Time spent on this challenge";
-            dgvProfiles.Columns["DifficultyCategory"].HeaderText = "Difficulty";
-
-            // Khối Day / Next challenge / Counters
-            dgvProfiles.Columns["Day"].HeaderText = "Day";
-            dgvProfiles.Columns["ChallengeNumber"].HeaderText = "Challenge #";
-            dgvProfiles.Columns["NextChallengeIn"].HeaderText = "Next challenge in";
-            dgvProfiles.Columns["LatestSubmissionAge"].HeaderText = "Latest submission";
-
-            // Difficulty chi tiết
-            dgvProfiles.Columns["DifficultyBits"].HeaderText = "Difficulty (bits)";
-            dgvProfiles.Columns["DifficultyHexShort"].HeaderText = "Difficulty (hex)";
-
-            // Availability & Counters
-            dgvProfiles.Columns["ChallengeAvailable"].HeaderText = "Challenge available";
-            dgvProfiles.Columns["AllEvents"].HeaderText = "All";
-            dgvProfiles.Columns["SolvedCount"].HeaderText = "Solved";
-            dgvProfiles.Columns["UnsolvedCount"].HeaderText = "Unsolved";
-
-            // Cột tương thích cũ
-            dgvProfiles.Columns["IsMining"].HeaderText = "Mining";
-            dgvProfiles.Columns["CreatedAt"].HeaderText = "Ngày tạo";
-
-            // Thêm cột checkbox
-            if (!dgvProfiles.Columns.Contains("Selected"))
-            {
-                var checkBoxColumn = new DataGridViewCheckBoxColumn
+                // Khởi tạo cột duy nhất 1 lần: chỉ hiển thị các cột yêu cầu
+                if (!_gridInitialized)
                 {
-                    Name = "Selected",
-                    HeaderText = "Chọn",
-                    Width = 50,
-                    AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                };
-                dgvProfiles.Columns.Insert(0, checkBoxColumn);
-                // Cấu hình tránh trạng thái 3 giá trị gây nhiễu toggling
-                checkBoxColumn.ThreeState = false;
-                checkBoxColumn.TrueValue = true;
-                checkBoxColumn.FalseValue = false;
-                checkBoxColumn.IndeterminateValue = false;
+                    this.dgvProfiles.Columns.Clear();
+
+                    // Cột Id ẩn để mapping
+                    var colId = new DataGridViewTextBoxColumn { Name = "Id", HeaderText = "ID", Visible = false };
+
+                    // 5 cột yêu cầu
+                    var colName = new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "Tên Profile", Width = 180, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    var colWallet = new DataGridViewTextBoxColumn { Name = "WalletAddress", HeaderText = "Địa chỉ Wallet", Width = 260, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    var colRecovery = new DataGridViewTextBoxColumn { Name = "RecoveryPhrase", HeaderText = "Recovery Phrase", Width = 300, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    var colPwd = new DataGridViewTextBoxColumn { Name = "WalletPassword", HeaderText = "Mật khẩu", Width = 150, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    var colStatus = new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng thái", Width = 120, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+
+                    this.dgvProfiles.Columns.AddRange(new DataGridViewColumn[] { colId, colName, colWallet, colRecovery, colPwd, colStatus });
+
+                    foreach (DataGridViewColumn col in this.dgvProfiles.Columns)
+                    {
+                        col.SortMode = DataGridViewColumnSortMode.NotSortable;
+                        col.ReadOnly = true;
+                    }
+
+                    _gridInitialized = true;
+                }
+
+                // Cập nhật số dòng hiển thị theo trang
+                this.dgvProfiles.RowCount = rows;
+
+                // Xóa chọn cũ để đồng bộ UI
+                this.dgvProfiles.ClearSelection();
+
+                this.dgvProfiles.ResumeLayout();
             }
 
-            // Đảm bảo chỉ cột "Selected" cho phép chỉnh sửa, các cột dữ liệu còn lại readonly để tránh lỗi sửa dữ liệu ẩn danh
-            foreach (DataGridViewColumn col in dgvProfiles.Columns)
+            // Cập nhật UI phân trang
+            if (lblPageInfo != null)
             {
-                col.ReadOnly = col.Name != "Selected";
+                lblPageInfo.Text = $"Trang {_currentPage}/{_totalPages} - Tổng {total}";
             }
-
-            // Khôi phục trạng thái checkbox theo _selectedProfileIds, tránh null
-            foreach (DataGridViewRow row in dgvProfiles.Rows)
-            {
-                var profileId = (int)row.Cells["Id"].Value;
-                row.Cells["Selected"].Value = _selectedProfileIds.Contains(profileId);
-            }
+            if (btnPrevPage != null) btnPrevPage.Enabled = _currentPage > 1;
+            if (btnNextPage != null) btnNextPage.Enabled = _currentPage < _totalPages;
         }
 
         private string GetStatusText(ProfileStatus status)
@@ -707,26 +734,29 @@ namespace MNAuto
         {
             if (dgvProfiles.Rows.Count == 0) return;
 
-            if (chkSelectAll.Checked)
-            {
-                foreach (var p in _profiles)
-                    _selectedProfileIds.Add(p.Id);
-            }
-            else
-            {
-                _selectedProfileIds.Clear();
-            }
-
+            bool selectAll = chkSelectAll.Checked;
             foreach (DataGridViewRow row in dgvProfiles.Rows)
             {
-                if (row.Cells["Id"].Value == null) continue;
-                row.Cells["Selected"].Value = chkSelectAll.Checked;
+                row.Selected = selectAll;
             }
         }
 
         private List<int> GetSelectedProfileIds()
         {
-            return _selectedProfileIds.ToList();
+            var result = new List<int>();
+            if (_profiles == null || _profiles.Count == 0) return result;
+
+            int startIndex = (_currentPage - 1) * _pageSize;
+
+            foreach (DataGridViewRow row in dgvProfiles.SelectedRows)
+            {
+                int index = startIndex + row.Index;
+                if (index >= 0 && index < _profiles.Count)
+                    result.Add(_profiles[index].Id);
+            }
+
+            result.Sort();
+            return result;
         }
 
         private async void Form1_FormClosing(object sender, FormClosingEventArgs e)
@@ -866,6 +896,94 @@ namespace MNAuto
                 val = val.Replace("\"", "\"\"");
                 return $"\"{val}\"";
             }));
+        }
+
+        // VirtualMode: cung cấp dữ liệu cho ô
+        private void dgvProfiles_CellValueNeeded(object? sender, DataGridViewCellValueEventArgs e)
+        {
+            if (_profiles == null)
+            {
+                e.Value = null;
+                return;
+            }
+
+            int startIndex = (_currentPage - 1) * _pageSize;
+            int index = startIndex + e.RowIndex;
+
+            if (index < 0 || index >= _profiles.Count)
+            {
+                e.Value = null;
+                return;
+            }
+
+            var p = _profiles[index];
+            var colName = dgvProfiles.Columns[e.ColumnIndex].Name;
+
+            switch (colName)
+            {
+                case "Id": e.Value = p.Id; break;
+                case "Name": e.Value = p.Name; break;
+                case "WalletAddress": e.Value = p.WalletAddress; break;
+                case "RecoveryPhrase": e.Value = p.RecoveryPhrase; break;
+                case "WalletPassword": e.Value = p.WalletPassword; break;
+                case "Status": e.Value = GetStatusText(p.Status); break;
+                default: e.Value = null; break;
+            }
+        }
+
+        // Sự kiện phân trang
+        private void btnPrevPage_Click(object? sender, EventArgs e)
+        {
+            if (_currentPage > 1)
+            {
+                _currentPage--;
+                RefreshProfileList();
+            }
+        }
+
+        private void btnNextPage_Click(object? sender, EventArgs e)
+        {
+            if (_currentPage < _totalPages)
+            {
+                _currentPage++;
+                RefreshProfileList();
+            }
+        }
+
+        private void nudPageSize_ValueChanged(object? sender, EventArgs e)
+        {
+            _pageSize = (int)(nudPageSize?.Value ?? 100);
+            if (_pageSize <= 0) _pageSize = 100;
+            _currentPage = 1;
+            RefreshProfileList();
+        }
+
+        // Tắt/ bật redraw để tăng tốc khi cập nhật dữ liệu
+        private const int WM_SETREDRAW = 0x000B;
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        private sealed class RedrawScope : IDisposable
+        {
+            private readonly Control _ctrl;
+            public RedrawScope(Control ctrl)
+            {
+                _ctrl = ctrl;
+                if (_ctrl.IsHandleCreated)
+                {
+                    SendMessage(_ctrl.Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
+                }
+            }
+
+            public void Dispose()
+            {
+                if (_ctrl.IsHandleCreated)
+                {
+                    SendMessage(_ctrl.Handle, WM_SETREDRAW, new IntPtr(1), IntPtr.Zero);
+                    _ctrl.Invalidate(true);
+                    _ctrl.Update();
+                }
+            }
         }
     }
 }

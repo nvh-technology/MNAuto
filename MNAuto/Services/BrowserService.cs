@@ -166,7 +166,14 @@ namespace MNAuto.Services
                 var baseDir = AppContext.BaseDirectory;
                 var profileRoot = Path.Combine(baseDir, "ProfileData");
                 Directory.CreateDirectory(profileRoot);
-                var profileDataPath = Path.Combine(profileRoot, $"Profile_{profile.Id}");
+                var profileDataPath = Path.Combine(profileRoot, $"Profile {profile.Id}");
+                // Di chuyển dữ liệu cũ nếu còn thư mục dạng "Profile_{id}" để đồng bộ theo quy tắc mới "Profile {id}"
+                var oldProfileDataPath = Path.Combine(profileRoot, $"Profile_{profile.Id}");
+                if (Directory.Exists(oldProfileDataPath) && !Directory.Exists(profileDataPath))
+                {
+                    Directory.Move(oldProfileDataPath, profileDataPath);
+                    _loggingService?.LogInfo(profile.Name, $"Đã di chuyển dữ liệu profile từ: {oldProfileDataPath} sang: {profileDataPath}");
+                }
                 Directory.CreateDirectory(profileDataPath);
                 _profileDataPaths[profile.Id] = profileDataPath;
                 
@@ -199,7 +206,7 @@ namespace MNAuto.Services
                         "--disable-blink-features=AutomationControlled",
                         "--disable-web-security",
                         "--disable-features=VizDisplayCompositor",
-                        "--profile-directory=Profile_" + profile.Id,
+                        "--profile-directory=Profile " + profile.Id,
                         "--disable-background-timer-throttling",
                         "--disable-backgrounding-occluded-windows",
                         "--disable-renderer-backgrounding",
@@ -837,7 +844,7 @@ namespace MNAuto.Services
         {
             try
             {
-                var profileName = $"Profile{profileId}";
+                var profileName = $"Profile {profileId}";
                 _loggingService?.LogInfo(profileName, "Bắt đầu đóng trình duyệt");
                 
                 if (_pages.ContainsKey(profileId))
@@ -858,7 +865,7 @@ namespace MNAuto.Services
             }
             catch (Exception ex)
             {
-                _loggingService?.LogError($"Profile{profileId}", $"Lỗi khi đóng trình duyệt: {ex.Message}", ex);
+                _loggingService?.LogError($"Profile {profileId}", $"Lỗi khi đóng trình duyệt: {ex.Message}", ex);
             }
         }
 
@@ -880,7 +887,7 @@ namespace MNAuto.Services
         {
             try
             {
-                var profileName = $"Profile{profileId}";
+                var profileName = $"Profile {profileId}";
                 _loggingService?.LogInfo(profileName, "Xóa dữ liệu extension/profile");
                 
                 if (_profileDataPaths.TryGetValue(profileId, out var dir))
@@ -898,7 +905,7 @@ namespace MNAuto.Services
                     var baseDir = AppContext.BaseDirectory;
                     var profileRoot = Path.Combine(baseDir, "ProfileData");
                     Directory.CreateDirectory(profileRoot);
-                    var newDir = Path.Combine(profileRoot, $"Profile_{profileId}");
+                    var newDir = Path.Combine(profileRoot, $"Profile {profileId}");
                     Directory.CreateDirectory(newDir);
                     _profileDataPaths[profileId] = newDir;
                     _loggingService?.LogInfo(profileName, $"Đã khởi tạo thư mục profile: {newDir}");
@@ -907,7 +914,7 @@ namespace MNAuto.Services
             }
             catch (Exception ex)
             {
-                _loggingService?.LogError($"Profile{profileId}", $"Lỗi khi xóa dữ liệu extension/profile: {ex.Message}", ex);
+                _loggingService?.LogError($"Profile {profileId}", $"Lỗi khi xóa dữ liệu extension/profile: {ex.Message}", ex);
                 return false;
             }
         }
@@ -1199,7 +1206,7 @@ namespace MNAuto.Services
                     if (string.IsNullOrWhiteSpace(resolved))
                         throw new Exception("Không thể xác định Extension ID");
                     _extensionIds[profileId] = resolved!;
-                    _loggingService?.LogInfo($"Profile{profileId}", $"Đã xác định Extension ID: {resolved}");
+                    _loggingService?.LogInfo($"Profile {profileId}", $"Đã xác định Extension ID: {resolved}");
                     extId = resolved!;
                 }
 
@@ -1225,7 +1232,7 @@ namespace MNAuto.Services
             }
             catch (Exception ex)
             {
-                _loggingService?.LogError($"Profile{profileId}", $"Lỗi BuildExtensionUrl: {ex.Message}", ex);
+                _loggingService?.LogError($"Profile {profileId}", $"Lỗi BuildExtensionUrl: {ex.Message}", ex);
                 // Fallback: chuẩn hóa suffix tương tự nhánh chính
                 var fallbackSuffix = pathSuffix ?? string.Empty;
                 if (!string.IsNullOrEmpty(fallbackSuffix))

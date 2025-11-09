@@ -188,16 +188,84 @@ namespace MNAuto.Services
             await connection.OpenAsync();
             
             var sql = @"
-                UPDATE Profiles 
+                UPDATE Profiles
                 SET WalletAddress = @WalletAddress, Status = @Status, UpdatedAt = @UpdatedAt
                 WHERE Id = @Id";
             
-            await connection.ExecuteAsync(sql, new { 
-                Id = id, 
-                WalletAddress = walletAddress, 
+            await connection.ExecuteAsync(sql, new {
+                Id = id,
+                WalletAddress = walletAddress,
                 Status = (int)ProfileStatus.Initialized,
-                UpdatedAt = DateTime.Now 
+                UpdatedAt = DateTime.Now
             });
+        }
+
+        /// <summary>
+        /// Đồng bộ Name của tất cả profiles theo quy tắc: "Profile {Id}" để đảm bảo duy nhất và phù hợp thư mục ProfileData
+        /// Xử lý an toàn UNIQUE(Name) bằng hai pha: đổi tên tạm nếu có xung đột, sau đó đặt tên cuối.
+        /// </summary>
+        public async Task NormalizeProfileNamesAsync()
+        {
+            using var connection = new SqliteConnection(_connectionString);
+            await connection.OpenAsync();
+            using var tx = connection.BeginTransaction();
+
+            var profiles = (await connection.QueryAsync<Profile>("SELECT Id, Name FROM Profiles ORDER BY Id", transaction: tx)).ToList();
+
+            // Bản đồ hỗ trợ phát hiện xung đột
+            var nameToId = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var idToName = new Dictionary<int, string>();
+            foreach (var p in profiles)
+            {
+                var currentName = p.Name ?? string.Empty;
+                if (!nameToId.ContainsKey(currentName))
+                    nameToId[currentName] = p.Id;
+                idToName[p.Id] = currentName;
+            }
+
+            // Pha 1: Giải phóng các tên đích đang bị chiếm bởi profile khác
+            foreach (var p in profiles)
+            {
+                var target = $"Profile {p.Id}";
+                if (nameToId.TryGetValue(target, out var ownerId) && ownerId != p.Id)
+                {
+                    var temp = $"__TMP__{ownerId}__{Guid.NewGuid():N}";
+                    await connection.ExecuteAsync(
+                        "UPDATE Profiles SET Name = @Name, UpdatedAt = @UpdatedAt WHERE Id = @Id",
+                        new { Name = temp, UpdatedAt = DateTime.Now, Id = ownerId },
+                        transaction: tx
+                    );
+
+                    // Cập nhật bản đồ
+                    nameToId.Remove(target);
+                    nameToId[temp] = ownerId;
+                    idToName[ownerId] = temp;
+                }
+            }
+
+            // Pha 2: Đặt tên cuối "Profile {Id}" cho tất cả rows chưa đúng
+            foreach (var p in profiles)
+            {
+                var target = $"Profile {p.Id}";
+                if (!string.Equals(idToName[p.Id], target, StringComparison.Ordinal))
+                {
+                    await connection.ExecuteAsync(
+                        "UPDATE Profiles SET Name = @Name, UpdatedAt = @UpdatedAt WHERE Id = @Id",
+                        new { Name = target, UpdatedAt = DateTime.Now, Id = p.Id },
+                        transaction: tx
+                    );
+
+                    // Cập nhật bản đồ
+                    if (nameToId.ContainsKey(idToName[p.Id]) && nameToId[idToName[p.Id]] == p.Id)
+                    {
+                        nameToId.Remove(idToName[p.Id]);
+                    }
+                    nameToId[target] = p.Id;
+                    idToName[p.Id] = target;
+                }
+            }
+
+            tx.Commit();
         }
     }
 }

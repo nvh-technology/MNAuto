@@ -46,39 +46,27 @@ namespace MNAuto.Services
             {
                 _loggingService.LogInfo("System", $"Bắt đầu tạo {count} profile mới");
 
-                // Lấy danh sách tên đã tồn tại để tránh trùng UNIQUE(Name)
-                var existing = await _databaseService.GetAllProfilesAsync();
-                var existingNames = new HashSet<string>(existing.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
-
+                // Tạo profile sao cho Name và thư mục ProfileData đồng bộ theo Id: "Profile {id}"
                 for (int i = 0; i < count; i++)
                 {
+                    // Đặt tên tạm thời để chèn (UNIQUE Name yêu cầu khác rỗng và duy nhất)
                     var profile = new Profile
                     {
-                        Name = GenerateUniqueProfileName(existingNames, "Profile"),
+                        Name = $"tmp-{Guid.NewGuid():N}",
                         WalletPassword = GenerateRandomPassword(15),
                         Status = ProfileStatus.NotInitialized
                     };
 
-                    // Thử chèn, nếu vẫn gặp UNIQUE do race-condition, sinh tên mới và thử lại
-                    const int maxAttempts = 50;
-                    var attempt = 0;
-                    while (true)
-                    {
-                        try
-                        {
-                            var profileId = await _databaseService.CreateProfileAsync(profile);
-                            profile.Id = profileId;
+                    // Chèn để lấy Id
+                    var profileId = await _databaseService.CreateProfileAsync(profile);
+                    profile.Id = profileId;
 
-                            profiles.Add(profile);
-                            _loggingService.LogInfo(profile.Name, "Đã tạo profile thành công");
-                            break;
-                        }
-                        catch (Exception ex) when (ex.Message.Contains("UNIQUE constraint failed: Profiles.Name") && attempt < maxAttempts)
-                        {
-                            attempt++;
-                            profile.Name = GenerateUniqueProfileName(existingNames, "Profile");
-                        }
-                    }
+                    // Cập nhật tên chính thức theo quy tắc: "Profile {Id}"
+                    profile.Name = $"Profile {profile.Id}";
+                    await _databaseService.UpdateProfileAsync(profile);
+
+                    profiles.Add(profile);
+                    _loggingService.LogInfo(profile.Name, "Đã tạo profile thành công");
                 }
 
                 _loggingService.LogInfo("System", $"Đã tạo xong {profiles.Count} profile");
