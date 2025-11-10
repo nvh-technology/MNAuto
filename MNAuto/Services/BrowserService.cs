@@ -327,15 +327,37 @@ namespace MNAuto.Services
                 var hasAddrPre = !string.IsNullOrWhiteSpace(latestProfilePre.WalletAddress);
 
                 if (hasPwdPre && hasRecPre && hasAddrPre)
+{
+    _loggingService?.LogInfo(profile.Name, "DB có đủ address/password/phrase -> bỏ qua tạo ví, điều hướng sang assets để xác nhận và kết thúc sớm.");
+    var gotoAssetsOk = await TryGotoExtensionAsync(profile, page, "/#/assets");
+    if (gotoAssetsOk)
+    {
+        // NEW: Nếu bị chuyển hướng sang trang setup => thực hiện Restore bằng dữ liệu trong DB rồi quay lại assets
+        await WaitForExtensionReady(page);
+        await WaitUntilNoPreloaderAsync(page);
+        var urlAfterNav = page.Url;
+        if (urlAfterNav.Contains("/setup", StringComparison.OrdinalIgnoreCase))
+        {
+            _loggingService?.LogInfo(profile.Name, "Phát hiện redirect tới trang setup khi vào assets. Thực hiện Restore từ DB.");
+            var restored = await RestoreWalletFromDBAsync(profile, page);
+            if (restored)
+            {
+                var navBackAssets = await TryGotoExtensionAsync(profile, page, "/#/assets");
+                if (!navBackAssets)
                 {
-                    _loggingService?.LogInfo(profile.Name, "DB có đủ address/password/phrase -> bỏ qua tạo ví, điều hướng sang assets để xác nhận và kết thúc.");
-                    var gotoAssetsOk = await TryGotoExtensionAsync(profile, page, "/#/assets");
-                    if (gotoAssetsOk)
-                    {
-                        try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
-                        return true;
-                    }
+                    _loggingService?.LogWarning(profile.Name, "Không thể quay lại trang assets sau khi Restore");
                 }
+            }
+            else
+            {
+                _loggingService?.LogWarning(profile.Name, "Restore thất bại trong nhánh xác nhận sớm");
+            }
+        }
+
+        try { await page.CloseAsync(); _pages.TryRemove(profile.Id, out _); } catch {}
+        return true;
+    }
+}
                 else if (hasPwdPre && hasRecPre && !hasAddrPre)
                 {
                     _loggingService?.LogInfo(profile.Name, "DB có password/phrase nhưng thiếu address -> điều hướng sang assets để lấy địa chỉ rồi kết thúc.");
@@ -713,6 +735,43 @@ namespace MNAuto.Services
                     }
                 }
                 
+                // NEW: Nếu bị chuyển hướng sang trang setup và DB có đủ dữ liệu thì thực hiện Restore từ DB trước khi lấy địa chỉ
+                if (page.Url.Contains("app.html#/setup", StringComparison.OrdinalIgnoreCase))
+                {
+                    _loggingService?.LogInfo(profile.Name, "Phát hiện trang setup khi truy cập assets. Thử Restore từ DB.");
+                    var latest = profile;
+                    if (_databaseService != null)
+                    {
+                        var dbProfile = await _databaseService.GetProfileAsync(profile.Id);
+                        if (dbProfile != null) latest = dbProfile;
+                    }
+                    bool hasPwd = !string.IsNullOrWhiteSpace(latest.WalletPassword);
+                    bool hasRec = !string.IsNullOrWhiteSpace(latest.RecoveryPhrase);
+                    bool hasAddr = !string.IsNullOrWhiteSpace(latest.WalletAddress);
+                    if (hasPwd && hasRec && hasAddr)
+                    {
+                        var restoredOk = await RestoreWalletFromDBAsync(latest, page);
+                        if (restoredOk)
+                        {
+                            // Sau restore, điều hướng về assets
+                            var navOk2 = await TryGotoExtensionAsync(profile, page, "/#/assets");
+                            if (!navOk2)
+                            {
+                                _loggingService?.LogError(profile.Name, "Không thể mở trang assets sau khi Restore");
+                                return false;
+                            }
+                        }
+                        else
+                        {
+                            _loggingService?.LogWarning(profile.Name, "Restore thất bại, tiếp tục thử lấy địa chỉ nếu có.");
+                        }
+                    }
+                    else
+                    {
+                        _loggingService?.LogWarning(profile.Name, "DB chưa đủ address/password/phrase để Restore. Bỏ qua.");
+                    }
+                }
+
                 // Chờ và tìm địa chỉ wallet
                 var maxAttempts = 20;
                 for (int i = 0; i < maxAttempts; i++)
@@ -758,6 +817,97 @@ namespace MNAuto.Services
                 return false;
             }
         }
+// NEW: Khôi phục ví từ dữ liệu trong DB khi extension buộc về trang setup
+private async Task<bool> RestoreWalletFromDBAsync(Profile profile, IPage page)
+{
+    try
+    {
+        _loggingService?.LogInfo(profile.Name, "Bắt đầu quy trình Restore wallet từ DB (address/password/phrase đã có)");
+        await WaitForExtensionReady(page);
+        await WaitUntilNoPreloaderAsync(page);
+
+        // Bước 1: Chọn Restore wallet
+        _loggingService?.LogInfo(profile.Name, "Chọn 'Restore wallet'");
+        await SafeClickOnceAsync(page, "button[data-testid='restore-wallet-button']", 60000, 500);
+
+        // Bước 2: Next để vào màn hình điền mnemonic
+        _loggingService?.LogInfo(profile.Name, "Tiếp tục Next vào màn hình nhập mnemonic");
+        await SafeClickOnceAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000, 500);
+
+        // Bước 3: Điền 24 từ mnemonic từ DB vào các ô input
+        _loggingService?.LogInfo(profile.Name, "Điền 24 từ mnemonic từ DB vào các ô input");
+        await WaitForVisibleAsync(page, "input[data-testid='mnemonic-word-input']", 60000);
+
+        var fillWords = (profile.RecoveryPhrase ?? string.Empty)
+            .Split(new[] { ' ', '\n', '\t', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            .Take(24)
+            .ToArray();
+
+        var inputs = await page.QuerySelectorAllAsync("input[data-testid='mnemonic-word-input']");
+        for (int i = 0; i < 10 && (inputs == null || inputs.Count < 24); i++)
+        {
+            await page.WaitForTimeoutAsync(300);
+            inputs = await page.QuerySelectorAllAsync("input[data-testid='mnemonic-word-input']");
+        }
+
+        if (inputs == null || inputs.Count == 0)
+        {
+            throw new Exception("Không tìm thấy ô nhập mnemonic-word-input trong quy trình Restore");
+        }
+
+        var maxFill = Math.Min(fillWords.Length, inputs.Count);
+        await WaitUntilNoPreloaderAsync(page);
+        for (int i = 0; i < maxFill; i++)
+        {
+            try
+            {
+                await inputs[i].FillAsync(fillWords[i]);
+                await page.WaitForTimeoutAsync(50);
+            }
+            catch (Exception ex)
+            {
+                _loggingService?.LogWarning(profile.Name, $"Lỗi điền từ mnemonic (Restore) tại vị trí {i + 1}: {ex.Message}");
+            }
+        }
+
+        if (maxFill < 24)
+        {
+            _loggingService?.LogWarning(profile.Name, $"(Restore) Chỉ điền được {maxFill}/24 từ mnemonic.");
+        }
+
+        await page.WaitForTimeoutAsync(500);
+
+        // Bước 4: Next sau khi điền mnemonic
+        _loggingService?.LogInfo(profile.Name, "Next sau khi nhập mnemonic");
+        await SafeClickOnceAsync(page, "[data-testid='wallet-setup-step-btn-next']", 60000, 800);
+
+        // Bước 5: Nhập mật khẩu wallet từ DB
+        _loggingService?.LogInfo(profile.Name, "Nhập mật khẩu wallet từ DB");
+        await WaitForVisibleAsync(page, "input[data-testid='wallet-password-verification-input']", 60000);
+        await WaitForVisibleAsync(page, "input[data-testid='wallet-password-confirmation-input']", 60000);
+        await SafeFillAsync(page, "input[data-testid='wallet-password-verification-input']", profile.WalletPassword);
+        await SafeFillAsync(page, "input[data-testid='wallet-password-confirmation-input']", profile.WalletPassword);
+
+        // Bước 6: Open wallet
+        _loggingService?.LogInfo(profile.Name, "Click 'Open wallet' để hoàn tất Restore");
+        await ClickButtonByText(page, "Open wallet");
+
+        // Chờ trang sẵn sàng sau khi mở ví
+        _loggingService?.LogInfo(profile.Name, "Chờ trang sẵn sàng sau 'Open wallet' (Restore)");
+        await WaitForExtensionReady(page);
+        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+        await WaitUntilNoPreloaderAsync(page);
+        await page.WaitForTimeoutAsync(1000);
+
+        _loggingService?.LogInfo(profile.Name, "Hoàn tất quy trình Restore wallet từ DB");
+        return true;
+    }
+    catch (Exception ex)
+    {
+        _loggingService?.LogError(profile.Name, $"Restore wallet từ DB thất bại: {ex.Message}", ex);
+        return false;
+    }
+}
 
         private async Task ClickButtonByText(IPage page, string buttonText)
         {
