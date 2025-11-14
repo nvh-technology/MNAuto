@@ -237,14 +237,15 @@ namespace MNAuto
                         ThreeState = false
                     };
 
-                    // 5 cột yêu cầu
-                    var colName = new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "Tên Profile", Width = 180, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
-                    var colWallet = new DataGridViewTextBoxColumn { Name = "WalletAddress", HeaderText = "Địa chỉ Wallet", Width = 260, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
-                    var colRecovery = new DataGridViewTextBoxColumn { Name = "RecoveryPhrase", HeaderText = "Recovery Phrase", Width = 300, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
-                    var colPwd = new DataGridViewTextBoxColumn { Name = "WalletPassword", HeaderText = "Mật khẩu", Width = 150, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
-                    var colStatus = new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng thái ví", Width = 120, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    // 5 cột yêu cầu + 1 cột donate
+                    var colName = new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "Tên Profile", Width = 150, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    var colWallet = new DataGridViewTextBoxColumn { Name = "WalletAddress", HeaderText = "Địa chỉ Wallet", Width = 220, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    var colRecovery = new DataGridViewTextBoxColumn { Name = "RecoveryPhrase", HeaderText = "Recovery Phrase", Width = 250, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    var colPwd = new DataGridViewTextBoxColumn { Name = "WalletPassword", HeaderText = "Mật khẩu", Width = 120, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    var colStatus = new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Trạng thái ví", Width = 100, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
+                    var colDestinationAddress = new DataGridViewTextBoxColumn { Name = "DestinationAddress", HeaderText = "Địa chỉ nhận donate", Width = 280, AutoSizeMode = DataGridViewAutoSizeColumnMode.None };
 
-                    this.dgvProfiles.Columns.AddRange(new DataGridViewColumn[] { colId, colSelected, colName, colWallet, colRecovery, colPwd, colStatus });
+                    this.dgvProfiles.Columns.AddRange(new DataGridViewColumn[] { colId, colSelected, colName, colWallet, colRecovery, colPwd, colStatus, colDestinationAddress });
 
                     foreach (DataGridViewColumn col in this.dgvProfiles.Columns)
                     {
@@ -919,6 +920,7 @@ namespace MNAuto
                         ws.Cell(1, 2).Value = "WalletAddress";
                         ws.Cell(1, 3).Value = "WalletPassword";
                         ws.Cell(1, 4).Value = "RecoveryPhrase";
+                        ws.Cell(1, 5).Value = "DestinationAddress";
 
                         // Rows
                         int row = 2;
@@ -928,11 +930,12 @@ namespace MNAuto
                             ws.Cell(row, 2).Value = p.WalletAddress ?? string.Empty;
                             ws.Cell(row, 3).Value = p.WalletPassword ?? string.Empty;
                             ws.Cell(row, 4).Value = p.RecoveryPhrase ?? string.Empty;
+                            ws.Cell(row, 5).Value = p.DestinationAddress ?? string.Empty;
                             row++;
                         }
 
                         // Auto-fit columns for better readability
-                        ws.Columns(1, 4).AdjustToContents();
+                        ws.Columns(1, 5).AdjustToContents();
 
                         wb.SaveAs(sfd.FileName);
                     }
@@ -973,7 +976,7 @@ namespace MNAuto
                         var headerRow = ws.Row(1);
                         if (!IsValidExcelHeader(headerRow))
                         {
-                            MessageBox.Show("File Excel không đúng định dạng. Cần có các cột: Tên profile, WalletAddress, WalletPassword, RecoveryPhrase",
+                            MessageBox.Show("File Excel không đúng định dạng. Cần có các cột: Tên profile, WalletAddress, WalletPassword, RecoveryPhrase, DestinationAddress",
                                 "Lỗi định dạng", MessageBoxButtons.OK, MessageBoxIcon.Error);
                             return;
                         }
@@ -990,6 +993,7 @@ namespace MNAuto
                                     WalletAddress = row.Cell(2).GetString().Trim(),
                                     WalletPassword = row.Cell(3).GetString().Trim(),
                                     RecoveryPhrase = row.Cell(4).GetString().Trim(),
+                                    DestinationAddress = row.Cell(5).GetString().Trim(),
                                     Status = ProfileStatus.NotInitialized,
                                     CreatedAt = DateTime.Now,
                                     UpdatedAt = DateTime.Now
@@ -1106,6 +1110,190 @@ namespace MNAuto
             }
         }
 
+        private async void btnDonateTo_Click(object sender, EventArgs e)
+        {
+            if (!_isInitialized || _profileManagerService == null || _scavengerMineService == null) return;
+            
+            var selectedIds = GetSelectedProfileIds();
+            if (selectedIds.Count == 0)
+            {
+                MessageBox.Show("Vui lòng chọn ít nhất một profile để donate", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var destinationAddress = txtDestinationAddress?.Text?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(destinationAddress))
+            {
+                MessageBox.Show("Vui lòng nhập địa chỉ nhận donate", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            
+            // Kiểm tra định dạng địa chỉ Cardano cơ bản
+            if (!IsValidCardanoAddress(destinationAddress))
+            {
+                MessageBox.Show("Địa chỉ nhận donate không hợp lệ. Địa chỉ Cardano phải bắt đầu bằng 'addr1' hoặc 'stake1'",
+                    "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            try
+            {
+                btnDonateTo.Enabled = false;
+                _loggingService?.LogInfo("System", $"Bắt đầu donate từ {selectedIds.Count} profile đến địa chỉ {destinationAddress}");
+                
+                int successCount = 0;
+                int errorCount = 0;
+                var results = new StringBuilder();
+
+                foreach (var profileId in selectedIds)
+                {
+                    try
+                    {
+                        // Lấy thông tin profile từ database
+                        var profile = await _databaseService!.GetProfileAsync(profileId);
+                        if (profile == null)
+                        {
+                            _loggingService?.LogWarning($"Profile {profileId}", "Không tìm thấy profile trong database");
+                            errorCount++;
+                            continue;
+                        }
+
+                        // Kiểm tra profile đã đăng ký chưa
+                        if (!profile.IsRegistered || string.IsNullOrWhiteSpace(profile.WalletAddress))
+                        {
+                            _loggingService?.LogWarning(profile.Name, "Profile chưa đăng ký hoặc không có địa chỉ ví");
+                            errorCount++;
+                            continue;
+                        }
+
+                        // Kiểm tra địa chỉ destination có trùng với địa chỉ profile không
+                        if (string.Equals(profile.WalletAddress, destinationAddress, StringComparison.OrdinalIgnoreCase))
+                        {
+                            _loggingService?.LogInfo(profile.Name, "Bỏ qua vì địa chỉ nhận donate trùng với địa chỉ profile");
+                            results.AppendLine($"- {profile.Name}: Bỏ qua (địa chỉ trùng)");
+                            continue;
+                        }
+
+                        // Tạo message để ký theo format API: "Assign accumulated Scavenger rights to: {destination address}"
+                        var messageToSign = $"Assign accumulated Scavenger rights to: {destinationAddress}";
+                        
+                        // Khởi động trình duyệt để ký message nếu cần
+                        var browserService = _profileManagerService.GetBrowserService();
+                        if (browserService == null)
+                        {
+                            _loggingService?.LogError(profile.Name, "Không lấy được BrowserService");
+                            errorCount++;
+                            continue;
+                        }
+
+                        // Mở trình duyệt để ký message
+                        if (!_profileManagerService.IsProfileRunning(profile.Id))
+                        {
+                            _loggingService?.LogInfo(profile.Name, "Khởi động trình duyệt để ký message donate");
+                            var started = await _profileManagerService.StartProfileAsync(profile.Id, headless: false);
+                            if (!started)
+                            {
+                                _loggingService?.LogError(profile.Name, "Không thể khởi động trình duyệt để ký");
+                                errorCount++;
+                                continue;
+                            }
+                            await Task.Delay(1500);
+                        }
+
+                        // Ký message
+                        _loggingService?.LogInfo(profile.Name, $"Ký message donate: {messageToSign}");
+                        var signResult = await browserService.SignMessageAsync(profile, messageToSign);
+                        
+                        if (signResult == null || string.IsNullOrWhiteSpace(signResult.Value.signature))
+                        {
+                            _loggingService?.LogError(profile.Name, "Không thể ký message donate");
+                            errorCount++;
+                            continue;
+                        }
+
+                        // Thực hiện donate
+                        var donateResponse = await _scavengerMineService.DonateToAsync(
+                            destinationAddress,
+                            profile.WalletAddress,
+                            signResult.Value.signature);
+
+                        if (donateResponse.Status == "success")
+                        {
+                            successCount++;
+                            results.AppendLine($"✓ {profile.Name}: Donate thành công (ID: {donateResponse.DonationId})");
+                            
+                            // Cập nhật trạng thái profile
+                            profile.HasDonated = true;
+                            profile.DestinationAddress = destinationAddress;
+                            profile.DonationId = donateResponse.DonationId;
+                            profile.DonationTimestamp = DateTime.UtcNow;
+                            await _databaseService.UpdateProfileAsync(profile);
+                        }
+                        else
+                        {
+                            errorCount++;
+                            results.AppendLine($"✗ {profile.Name}: {donateResponse.Message}");
+                        }
+
+                        // Đóng trình duyệt sau khi hoàn thành
+                        try
+                        {
+                            if (_profileManagerService.IsProfileRunning(profile.Id))
+                            {
+                                await browserService.CloseBrowserAsync(profile.Id);
+                            }
+                        }
+                        catch (Exception closeEx)
+                        {
+                            _loggingService?.LogWarning(profile.Name, $"Không thể đóng trình duyệt sau khi donate: {closeEx.Message}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        errorCount++;
+                        _loggingService?.LogError($"Profile {profileId}", $"Lỗi khi donate: {ex.Message}", ex);
+                        results.AppendLine($"✗ Profile {profileId}: {ex.Message}");
+                    }
+                }
+
+                // Làm mới danh sách profiles
+                await LoadProfilesAsync();
+
+                // Hiển thị kết quả
+                var message = $"Hoàn thành donate:\n" +
+                             $"- Thành công: {successCount}\n" +
+                             $"- Lỗi: {errorCount}\n\n";
+                
+                if (results.Length > 0)
+                {
+                    message += "Chi tiết:\n" + results.ToString();
+                }
+
+                MessageBox.Show(message, "Kết quả donate", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                _loggingService?.LogInfo("System", $"Hoàn thành donate: {successCount} thành công, {errorCount} lỗi");
+            }
+            catch (Exception ex)
+            {
+                _loggingService?.LogError("System", $"Lỗi khi thực hiện donate: {ex.Message}", ex);
+                MessageBox.Show($"Lỗi khi thực hiện donate: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                btnDonateTo.Enabled = true;
+            }
+        }
+        
+        // Kiểm tra định dạng địa chỉ Cardano cơ bản
+        private bool IsValidCardanoAddress(string address)
+        {
+            if (string.IsNullOrWhiteSpace(address))
+                return false;
+                
+            // Địa chỉ Cardano Shelley bắt đầu bằng "addr1" hoặc "stake1"
+            return address.StartsWith("addr1", StringComparison.OrdinalIgnoreCase) ||
+                   address.StartsWith("stake1", StringComparison.OrdinalIgnoreCase);
+        }
+
         // Kiểm tra header của file Excel có đúng định dạng không
         private bool IsValidExcelHeader(IXLRow headerRow)
         {
@@ -1115,6 +1303,7 @@ namespace MNAuto
                 var col2 = headerRow.Cell(2).GetString().Trim();
                 var col3 = headerRow.Cell(3).GetString().Trim();
                 var col4 = headerRow.Cell(4).GetString().Trim();
+                var col5 = headerRow.Cell(5).GetString().Trim();
 
                 return (col1.Equals("Tên profile", StringComparison.OrdinalIgnoreCase) ||
                         col1.Equals("Name", StringComparison.OrdinalIgnoreCase)) &&
@@ -1123,7 +1312,10 @@ namespace MNAuto
                        (col3.Equals("WalletPassword", StringComparison.OrdinalIgnoreCase) ||
                         col3.Equals("Wallet Password", StringComparison.OrdinalIgnoreCase)) &&
                        (col4.Equals("RecoveryPhrase", StringComparison.OrdinalIgnoreCase) ||
-                        col4.Equals("Recovery Phrase", StringComparison.OrdinalIgnoreCase));
+                        col4.Equals("Recovery Phrase", StringComparison.OrdinalIgnoreCase)) &&
+                       (col5.Equals("DestinationAddress", StringComparison.OrdinalIgnoreCase) ||
+                        col5.Equals("Destination Address", StringComparison.OrdinalIgnoreCase) ||
+                        col5.Equals("Donate To", StringComparison.OrdinalIgnoreCase));
             }
             catch
             {
@@ -1171,6 +1363,7 @@ namespace MNAuto
                 case "RecoveryPhrase": e.Value = p.RecoveryPhrase; break;
                 case "WalletPassword": e.Value = p.WalletPassword; break;
                 case "Status": e.Value = GetWalletStatusText(p); break;
+                case "DestinationAddress": e.Value = p.DestinationAddress; break;
                 default: e.Value = null; break;
             }
         }

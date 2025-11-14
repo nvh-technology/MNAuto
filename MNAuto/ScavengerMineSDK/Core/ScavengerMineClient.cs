@@ -196,6 +196,70 @@ namespace ScavengerMineSDK.Core
             }
         }
 
+        public async Task<DonateToResponse> DonateToAsync(DonateToRequest request)
+        {
+            try
+            {
+                Logger.Info($"DonateTo: From {request.OriginalAddress} to {request.DestinationAddress}");
+                
+                // Thử API v2 trước
+                try
+                {
+                    var json = JsonSerializer.Serialize(request);
+                    var content = new StringContent(json, Encoding.UTF8, "application/json");
+                    
+                    var response = await _httpClient.PostAsync($"{_baseUrl}/api/v2/donate_to", content);
+                    response.EnsureSuccessStatusCode();
+                    
+                    var responseContent = await response.Content.ReadAsStringAsync();
+                    var result = JsonSerializer.Deserialize<DonateToResponse>(responseContent, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+                    
+                    Logger.Info($"DonateTo result (v2): {result?.Status}");
+                    return result ?? new DonateToResponse { Status = "error", Message = "Unknown error" };
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warning($"DonateTo v2 failed, will try fallback. Reason: {ex.Message}");
+                }
+
+                // Fallback: theo tài liệu Scavenger Mine (POST /donate_to/{destination_address}/{original_address}/{signature})
+                try
+                {
+                    var encodedDestination = Uri.EscapeDataString(request.DestinationAddress);
+                    var encodedOriginal = Uri.EscapeDataString(request.OriginalAddress);
+                    var encodedSignature = Uri.EscapeDataString(request.Signature);
+
+                    var url = $"{_fallbackBaseUrl}/donate_to/{encodedDestination}/{encodedOriginal}/{encodedSignature}";
+                    var content = new StringContent("{}", Encoding.UTF8, "application/json");
+
+                    var response = await _httpClient.PostAsync(url, content);
+                    response.EnsureSuccessStatusCode();
+
+                    var json = await response.Content.ReadAsStringAsync();
+                    var result = JsonSerializer.Deserialize<DonateToResponse>(json, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+
+                    Logger.Info($"DonateTo result (fallback): {result?.Status}");
+                    return result ?? new DonateToResponse { Status = "error", Message = "Unknown error" };
+                }
+                catch (Exception ex2)
+                {
+                    Logger.Error("Error in DonateToAsync fallback (/donate_to)", ex2);
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Error in DonateToAsync: {ex.Message}", ex);
+                throw;
+            }
+        }
+
         public async Task<WorkToStarRateResponse> GetWorkToStarRateAsync()
         {
             try

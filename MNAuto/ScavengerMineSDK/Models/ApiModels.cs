@@ -197,6 +197,43 @@ namespace ScavengerMineSDK.Models
         public long Timestamp { get; set; }
     }
 
+    // Donate To - theo tài liệu API V2
+    public class DonateToRequest
+    {
+        [JsonPropertyName("destination_address")]
+        public string DestinationAddress { get; set; } = string.Empty;
+
+        [JsonPropertyName("original_address")]
+        public string OriginalAddress { get; set; } = string.Empty;
+
+        [JsonPropertyName("signature")]
+        public string Signature { get; set; } = string.Empty;
+    }
+
+    public class DonateToResponse
+    {
+        [JsonPropertyName("status")]
+        public string Status { get; set; } = string.Empty;
+
+        [JsonPropertyName("message")]
+        public string Message { get; set; } = string.Empty;
+
+        [JsonPropertyName("donation_id")]
+        public string DonationId { get; set; } = string.Empty;
+
+        [JsonPropertyName("original_address")]
+        public string OriginalAddress { get; set; } = string.Empty;
+
+        [JsonPropertyName("destination_address")]
+        public string DestinationAddress { get; set; } = string.Empty;
+
+        [JsonPropertyName("timestamp")]
+        public string Timestamp { get; set; } = string.Empty;
+
+        [JsonPropertyName("solutions_consolidated")]
+        public int SolutionsConsolidated { get; set; }
+    }
+
     // Event args - mở rộng để tương thích với Form1 & Service
     public class MiningProgressEventArgs : EventArgs
     {

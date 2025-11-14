@@ -101,6 +101,30 @@ namespace MNAuto.Services
                 connection.Execute("ALTER TABLE Profiles ADD COLUMN WorkerId TEXT DEFAULT ''");
             }
             catch { /* Column already exists */ }
+            
+            try
+            {
+                connection.Execute("ALTER TABLE Profiles ADD COLUMN HasDonated INTEGER NOT NULL DEFAULT 0");
+            }
+            catch { /* Column already exists */ }
+            
+            try
+            {
+                connection.Execute("ALTER TABLE Profiles ADD COLUMN DestinationAddress TEXT DEFAULT ''");
+            }
+            catch { /* Column already exists */ }
+            
+            try
+            {
+                connection.Execute("ALTER TABLE Profiles ADD COLUMN DonationId TEXT DEFAULT ''");
+            }
+            catch { /* Column already exists */ }
+            
+            try
+            {
+                connection.Execute("ALTER TABLE Profiles ADD COLUMN DonationTimestamp DATETIME");
+            }
+            catch { /* Column already exists */ }
         }
 
         public async Task<int> CreateProfileAsync(Profile profile)
@@ -109,8 +133,8 @@ namespace MNAuto.Services
             await connection.OpenAsync();
             
             var sql = @"
-                INSERT INTO Profiles (Name, RecoveryPhrase, NightTokens, WalletAddress, WalletPassword, Status, CreatedAt, UpdatedAt, PublicKey, Signature, IsRegistered, RegistrationReceipt, WorkerId, IsMining, TotalHashes, SolutionsFound)
-                VALUES (@Name, @RecoveryPhrase, @NightTokens, @WalletAddress, @WalletPassword, @Status, @CreatedAt, @UpdatedAt, @PublicKey, @Signature, @IsRegistered, @RegistrationReceipt, @WorkerId, @IsMining, @TotalHashes, @SolutionsFound);
+                INSERT INTO Profiles (Name, RecoveryPhrase, NightTokens, WalletAddress, WalletPassword, Status, CreatedAt, UpdatedAt, PublicKey, Signature, IsRegistered, RegistrationReceipt, WorkerId, IsMining, TotalHashes, SolutionsFound, HasDonated, DestinationAddress, DonationId, DonationTimestamp)
+                VALUES (@Name, @RecoveryPhrase, @NightTokens, @WalletAddress, @WalletPassword, @Status, @CreatedAt, @UpdatedAt, @PublicKey, @Signature, @IsRegistered, @RegistrationReceipt, @WorkerId, @IsMining, @TotalHashes, @SolutionsFound, @HasDonated, @DestinationAddress, @DonationId, @DonationTimestamp);
                 SELECT last_insert_rowid();";
             
             profile.CreatedAt = DateTime.Now;
@@ -149,7 +173,8 @@ namespace MNAuto.Services
                     WalletAddress = @WalletAddress, WalletPassword = @WalletPassword,
                     Status = @Status, UpdatedAt = @UpdatedAt, PublicKey = @PublicKey,
                     Signature = @Signature, IsRegistered = @IsRegistered, RegistrationReceipt = @RegistrationReceipt, WorkerId = @WorkerId,
-                    IsMining = @IsMining, TotalHashes = @TotalHashes, SolutionsFound = @SolutionsFound
+                    IsMining = @IsMining, TotalHashes = @TotalHashes, SolutionsFound = @SolutionsFound,
+                    HasDonated = @HasDonated, DestinationAddress = @DestinationAddress, DonationId = @DonationId, DonationTimestamp = @DonationTimestamp
                 WHERE Id = @Id";
             
             profile.UpdatedAt = DateTime.Now;

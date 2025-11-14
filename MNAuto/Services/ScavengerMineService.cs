@@ -438,6 +438,48 @@ namespace MNAuto.Services
             return zeroNibbles * 4;
         }
 
+        /// <summary>
+        /// Thực hiện donate từ một địa chỉ sang địa chỉ khác
+        /// </summary>
+        public async Task<DonateToResponse> DonateToAsync(string destinationAddress, string originalAddress, string signature)
+        {
+            try
+            {
+                _loggingService.LogInfo("ScavengerMine", $"Bắt đầu donate từ {originalAddress} đến {destinationAddress}");
+                
+                var request = new DonateToRequest
+                {
+                    DestinationAddress = destinationAddress,
+                    OriginalAddress = originalAddress,
+                    Signature = signature
+                };
+                
+                var response = await _client.DonateToAsync(request);
+                
+                if (response.Status == "success")
+                {
+                    _loggingService.LogInfo("ScavengerMine",
+                        $"Donate thành công. ID: {response.DonationId}, Solutions: {response.SolutionsConsolidated}");
+                    _loggingService.LogInfo("ScavengerMine",
+                        $"Chi tiết response: Status={response.Status}, DonationId={response.DonationId}, SolutionsConsolidated={response.SolutionsConsolidated}, Message={response.Message}");
+                }
+                else
+                {
+                    _loggingService.LogWarning("ScavengerMine",
+                        $"Donate không thành công. Status: {response.Status}, Message: {response.Message}");
+                    _loggingService.LogInfo("ScavengerMine",
+                        $"Chi tiết response: Status={response.Status}, DonationId={response.DonationId}, SolutionsConsolidated={response.SolutionsConsolidated}, Message={response.Message}");
+                }
+                
+                return response;
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogError("ScavengerMine", $"Lỗi khi thực hiện donate: {ex.Message}", ex);
+                throw;
+            }
+        }
+
         public void Dispose()
         {
             if (!_disposed)

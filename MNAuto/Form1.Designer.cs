@@ -30,10 +30,10 @@
         {
             this.components = new System.ComponentModel.Container();
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(1200, 800);
+            this.ClientSize = new System.Drawing.Size(1300, 800);
             this.Text = "MNAuto - Quản lý trình duyệt hàng loạt";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.MinimumSize = new System.Drawing.Size(1000, 600);
+            this.MinimumSize = new System.Drawing.Size(1300, 600);
             this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.Form1_FormClosing);
             
             // Tạo các controls
@@ -55,6 +55,9 @@
             this.btnClearLog = new System.Windows.Forms.Button();
             this.btnExportAll = new System.Windows.Forms.Button();
             this.btnImportExcel = new System.Windows.Forms.Button();
+            this.btnDonateTo = new System.Windows.Forms.Button();
+            this.lblDestinationAddress = new System.Windows.Forms.Label();
+            this.txtDestinationAddress = new System.Windows.Forms.TextBox();
             
             // Cấu hình các controls
             this.lblProfileCount.AutoSize = true;
@@ -111,7 +114,7 @@
             this.dgvProfiles.ReadOnly = false;
             this.dgvProfiles.EditMode = System.Windows.Forms.DataGridViewEditMode.EditOnEnter;
             this.dgvProfiles.RowTemplate.Height = 24;
-            this.dgvProfiles.Size = new System.Drawing.Size(1176, 300);
+            this.dgvProfiles.Size = new System.Drawing.Size(1276, 300);
             this.dgvProfiles.TabIndex = 4;
             this.dgvProfiles.CurrentCellDirtyStateChanged += new System.EventHandler(this.dgvProfiles_CurrentCellDirtyStateChanged);
             
@@ -182,10 +185,31 @@
             this.btnImportExcel.UseVisualStyleBackColor = true;
             this.btnImportExcel.Click += new System.EventHandler(this.btnImportExcel_Click);
             
+            // Controls cho Donate To - đặt ngay dưới cụm tạo profiles
+            this.lblDestinationAddress.AutoSize = true;
+            this.lblDestinationAddress.Location = new System.Drawing.Point(690, 15);
+            this.lblDestinationAddress.Name = "lblDestinationAddress";
+            this.lblDestinationAddress.Size = new System.Drawing.Size(120, 17);
+            this.lblDestinationAddress.Text = "Địa chỉ nhận donate:";
+            
+            this.txtDestinationAddress.Location = new System.Drawing.Point(815, 12);
+            this.txtDestinationAddress.Name = "txtDestinationAddress";
+            this.txtDestinationAddress.Size = new System.Drawing.Size(350, 23);
+            this.txtDestinationAddress.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left;
+            
+            this.btnDonateTo.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)));
+            this.btnDonateTo.Location = new System.Drawing.Point(1170, 11);
+            this.btnDonateTo.Name = "btnDonateTo";
+            this.btnDonateTo.Size = new System.Drawing.Size(100, 25);
+            this.btnDonateTo.TabIndex = 14;
+            this.btnDonateTo.Text = "Donate To";
+            this.btnDonateTo.UseVisualStyleBackColor = true;
+            this.btnDonateTo.Click += new System.EventHandler(this.btnDonateTo_Click);
+            
             this.lblLog.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
             this.lblLog.AutoSize = true;
-            this.lblLog.Location = new System.Drawing.Point(12, 420);
+            this.lblLog.Location = new System.Drawing.Point(12, 440);
             this.lblLog.Name = "lblLog";
             this.lblLog.Size = new System.Drawing.Size(30, 17);
             this.lblLog.TabIndex = 10;
@@ -193,17 +217,17 @@
             
             this.txtLog.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.txtLog.Location = new System.Drawing.Point(12, 440);
+            this.txtLog.Location = new System.Drawing.Point(12, 460);
             this.txtLog.Multiline = true;
             this.txtLog.Name = "txtLog";
             this.txtLog.ReadOnly = true;
             this.txtLog.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
-            this.txtLog.Size = new System.Drawing.Size(1176, 320);
+            this.txtLog.Size = new System.Drawing.Size(1276, 300);
             this.txtLog.TabIndex = 11;
             this.txtLog.Font = new System.Drawing.Font("Consolas", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             
             this.btnClearLog.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnClearLog.Location = new System.Drawing.Point(1068, 410);
+            this.btnClearLog.Location = new System.Drawing.Point(1068, 430);
             this.btnClearLog.Name = "btnClearLog";
             this.btnClearLog.Size = new System.Drawing.Size(120, 25);
             this.btnClearLog.TabIndex = 12;
@@ -230,6 +254,9 @@
             this.Controls.Add(this.lblLog);
             this.Controls.Add(this.txtLog);
             this.Controls.Add(this.btnClearLog);
+            this.Controls.Add(this.lblDestinationAddress);
+            this.Controls.Add(this.txtDestinationAddress);
+            this.Controls.Add(this.btnDonateTo);
         }
 
         #endregion
@@ -252,5 +279,8 @@
         private System.Windows.Forms.TextBox txtLog;
         private System.Windows.Forms.Button btnClearLog;
         private System.Windows.Forms.Button btnImportExcel;
+        private System.Windows.Forms.Button btnDonateTo;
+        private System.Windows.Forms.Label lblDestinationAddress;
+        private System.Windows.Forms.TextBox txtDestinationAddress;
     }
 }

@@ -24,6 +24,12 @@ namespace MNAuto.Models
         public bool IsMining { get; set; } = false;
         public long TotalHashes { get; set; } = 0;
         public int SolutionsFound { get; set; } = 0;
+        
+        // Thông tin donate
+        public bool HasDonated { get; set; } = false;
+        public string DestinationAddress { get; set; } = string.Empty;
+        public string DonationId { get; set; } = string.Empty;
+        public DateTime? DonationTimestamp { get; set; }
     }
 
     public enum ProfileStatus
