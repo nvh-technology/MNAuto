@@ -1003,6 +1003,10 @@ namespace MNAuto
                                     continue;
                                 }
 
+                                // Lưu số dòng Excel để hiển thị trong log trùng lặp
+                                profile.CreatedAt = DateTime.Now; // Sử dụng CreatedAt tạm để lưu row number
+                                profile.UpdatedAt = DateTime.Now.AddMilliseconds(row.RowNumber()); // Sử dụng UpdatedAt tạm để lưu row number
+
                                 importedProfiles.Add(profile);
                             }
                             catch (Exception ex)
@@ -1037,32 +1041,44 @@ namespace MNAuto
                     {
                         try
                         {
-                            // Kiểm tra trùng tên
-                            var existingProfile = _profiles.FirstOrDefault(p =>
-                                string.Equals(p.Name, profile.Name, StringComparison.OrdinalIgnoreCase));
+                            // Lấy số dòng Excel từ UpdatedAt (đã lưu tạm ở trên)
+                            int excelRowNumber = (int)(profile.UpdatedAt.TimeOfDay.TotalMilliseconds);
                             
-                            if (existingProfile != null)
+                            // Kiểm tra trùng lặp qua wallet address
+                            if (!string.IsNullOrWhiteSpace(profile.WalletAddress))
                             {
-                                duplicateCount++;
-                                _loggingService?.LogWarning("Import", $"Profile '{profile.Name}' đã tồn tại, bỏ qua");
-                                continue;
+                                var existingProfile = _profiles.FirstOrDefault(p =>
+                                    !string.IsNullOrWhiteSpace(p.WalletAddress) &&
+                                    string.Equals(p.WalletAddress, profile.WalletAddress, StringComparison.OrdinalIgnoreCase));
+                                
+                                if (existingProfile != null)
+                                {
+                                    duplicateCount++;
+                                    _loggingService?.LogWarning("Import",
+                                        $"Wallet trùng lặp - Dòng Excel: {excelRowNumber}, Tên profile: '{profile.Name}', Wallet: '{profile.WalletAddress}' (đã tồn tại trong profile '{existingProfile.Name}')");
+                                    continue;
+                                }
                             }
 
                             // Tạo profile mới trong database
                             var newId = await _databaseService!.CreateProfileAsync(profile);
                             profile.Id = newId;
                             
-                            // Cập nhật tên theo quy tắc "Profile {Id}" để đảm bảo uniqueness
+                            // Đặt tên profile theo quy tắc "Profile {Id}" (ID tự động tăng dần)
                             profile.Name = $"Profile {newId}";
                             await _databaseService.UpdateProfileAsync(profile);
                             
+                            // Thêm vào danh sách profiles hiện tại để kiểm tra trùng lặp cho các profile tiếp theo
+                            _profiles.Add(profile);
+                            
                             successCount++;
-                            _loggingService?.LogInfo("Import", $"Đã import profile '{profile.Name}' (ID: {newId})");
+                            _loggingService?.LogInfo("Import", $"Đã import profile '{profile.Name}' (ID: {newId}) - Dòng Excel: {excelRowNumber}");
                         }
                         catch (Exception ex)
                         {
                             errorCount++;
-                            _loggingService?.LogError("Import", $"Lỗi khi import profile '{profile.Name}': {ex.Message}");
+                            int excelRowNumber = (int)(profile.UpdatedAt.TimeOfDay.TotalMilliseconds);
+                            _loggingService?.LogError("Import", $"Lỗi khi import profile '{profile.Name}' (Dòng Excel: {excelRowNumber}): {ex.Message}");
                         }
                     }
 
@@ -1072,11 +1088,11 @@ namespace MNAuto
                     // Hiển thị kết quả
                     var message = $"Hoàn thành import profiles từ Excel:\n" +
                         $"- Thành công: {successCount}\n" +
-                        $"- Trùng lặp: {duplicateCount}\n" +
+                        $"- Trùng lặp (wallet): {duplicateCount}\n" +
                         $"- Lỗi: {errorCount}";
                     
                     MessageBox.Show(message, "Kết quả import", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    _loggingService?.LogInfo("System", $"Hoàn thành import: {successCount} thành công, {duplicateCount} trùng, {errorCount} lỗi");
+                    _loggingService?.LogInfo("System", $"Hoàn thành import: {successCount} thành công, {duplicateCount} trùng lặp wallet, {errorCount} lỗi");
                 }
             }
             catch (Exception ex)
