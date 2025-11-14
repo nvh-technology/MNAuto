@@ -14,6 +14,7 @@ using System.IO;
 using System.Text;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using Microsoft.Win32;
 using ClosedXML.Excel;
 
 namespace MNAuto
@@ -943,6 +944,174 @@ namespace MNAuto
             {
                 _loggingService?.LogError("System", $"Lỗi khi export profiles: {ex.Message}", ex);
                 MessageBox.Show($"Lỗi khi export profiles: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // Import profiles từ file Excel
+        private async void btnImportExcel_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                using (var ofd = new OpenFileDialog())
+                {
+                    ofd.Filter = "Excel Workbook (*.xlsx)|*.xlsx";
+                    ofd.Title = "Chọn file Excel để import profiles";
+                    if (ofd.ShowDialog() != DialogResult.OK) return;
+
+                    var importedProfiles = new List<Profile>();
+                    
+                    using (var wb = new XLWorkbook(ofd.FileName))
+                    {
+                        var ws = wb.Worksheets.FirstOrDefault();
+                        if (ws == null)
+                        {
+                            MessageBox.Show("File Excel không có worksheet nào", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            return;
+                        }
+
+                        // Kiểm tra header
+                        var headerRow = ws.Row(1);
+                        if (!IsValidExcelHeader(headerRow))
+                        {
+                            MessageBox.Show("File Excel không đúng định dạng. Cần có các cột: Tên profile, WalletAddress, WalletPassword, RecoveryPhrase",
+                                "Lỗi định dạng", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            return;
+                        }
+
+                        // Đọc dữ liệu từ các dòng
+                        var dataRows = ws.RowsUsed().Skip(1).ToList(); // Bỏ qua header
+                        foreach (var row in dataRows)
+                        {
+                            try
+                            {
+                                var profile = new Profile
+                                {
+                                    Name = row.Cell(1).GetString().Trim(),
+                                    WalletAddress = row.Cell(2).GetString().Trim(),
+                                    WalletPassword = row.Cell(3).GetString().Trim(),
+                                    RecoveryPhrase = row.Cell(4).GetString().Trim(),
+                                    Status = ProfileStatus.NotInitialized,
+                                    CreatedAt = DateTime.Now,
+                                    UpdatedAt = DateTime.Now
+                                };
+
+                                // Validate dữ liệu cơ bản
+                                if (string.IsNullOrWhiteSpace(profile.Name) ||
+                                    string.IsNullOrWhiteSpace(profile.WalletPassword))
+                                {
+                                    _loggingService?.LogWarning("Import", $"Bỏ qua dòng {row.RowNumber()}: Thiếu thông tin bắt buộc");
+                                    continue;
+                                }
+
+                                importedProfiles.Add(profile);
+                            }
+                            catch (Exception ex)
+                            {
+                                _loggingService?.LogWarning("Import", $"Lỗi khi đọc dòng {row.RowNumber()}: {ex.Message}");
+                            }
+                        }
+                    }
+
+                    if (importedProfiles.Count == 0)
+                    {
+                        MessageBox.Show("Không có profile hợp lệ nào để import", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    // Hiển thị dialog xác nhận
+                    var result = MessageBox.Show($"Tìm thấy {importedProfiles.Count} profile hợp lệ trong file Excel.\n\n" +
+                        "Bạn có muốn import các profile này không?",
+                        "Xác nhận import", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                    
+                    if (result != DialogResult.Yes) return;
+
+                    // Bắt đầu import
+                    btnImportExcel.Enabled = false;
+                    _loggingService?.LogInfo("System", $"Bắt đầu import {importedProfiles.Count} profile từ Excel");
+
+                    var successCount = 0;
+                    var duplicateCount = 0;
+                    var errorCount = 0;
+
+                    foreach (var profile in importedProfiles)
+                    {
+                        try
+                        {
+                            // Kiểm tra trùng tên
+                            var existingProfile = _profiles.FirstOrDefault(p =>
+                                string.Equals(p.Name, profile.Name, StringComparison.OrdinalIgnoreCase));
+                            
+                            if (existingProfile != null)
+                            {
+                                duplicateCount++;
+                                _loggingService?.LogWarning("Import", $"Profile '{profile.Name}' đã tồn tại, bỏ qua");
+                                continue;
+                            }
+
+                            // Tạo profile mới trong database
+                            var newId = await _databaseService!.CreateProfileAsync(profile);
+                            profile.Id = newId;
+                            
+                            // Cập nhật tên theo quy tắc "Profile {Id}" để đảm bảo uniqueness
+                            profile.Name = $"Profile {newId}";
+                            await _databaseService.UpdateProfileAsync(profile);
+                            
+                            successCount++;
+                            _loggingService?.LogInfo("Import", $"Đã import profile '{profile.Name}' (ID: {newId})");
+                        }
+                        catch (Exception ex)
+                        {
+                            errorCount++;
+                            _loggingService?.LogError("Import", $"Lỗi khi import profile '{profile.Name}': {ex.Message}");
+                        }
+                    }
+
+                    // Tải lại danh sách profiles
+                    await LoadProfilesAsync();
+
+                    // Hiển thị kết quả
+                    var message = $"Hoàn thành import profiles từ Excel:\n" +
+                        $"- Thành công: {successCount}\n" +
+                        $"- Trùng lặp: {duplicateCount}\n" +
+                        $"- Lỗi: {errorCount}";
+                    
+                    MessageBox.Show(message, "Kết quả import", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    _loggingService?.LogInfo("System", $"Hoàn thành import: {successCount} thành công, {duplicateCount} trùng, {errorCount} lỗi");
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggingService?.LogError("System", $"Lỗi khi import từ Excel: {ex.Message}", ex);
+                MessageBox.Show($"Lỗi khi import từ Excel: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                btnImportExcel.Enabled = true;
+            }
+        }
+
+        // Kiểm tra header của file Excel có đúng định dạng không
+        private bool IsValidExcelHeader(IXLRow headerRow)
+        {
+            try
+            {
+                var col1 = headerRow.Cell(1).GetString().Trim();
+                var col2 = headerRow.Cell(2).GetString().Trim();
+                var col3 = headerRow.Cell(3).GetString().Trim();
+                var col4 = headerRow.Cell(4).GetString().Trim();
+
+                return (col1.Equals("Tên profile", StringComparison.OrdinalIgnoreCase) ||
+                        col1.Equals("Name", StringComparison.OrdinalIgnoreCase)) &&
+                       (col2.Equals("WalletAddress", StringComparison.OrdinalIgnoreCase) ||
+                        col2.Equals("Wallet Address", StringComparison.OrdinalIgnoreCase)) &&
+                       (col3.Equals("WalletPassword", StringComparison.OrdinalIgnoreCase) ||
+                        col3.Equals("Wallet Password", StringComparison.OrdinalIgnoreCase)) &&
+                       (col4.Equals("RecoveryPhrase", StringComparison.OrdinalIgnoreCase) ||
+                        col4.Equals("Recovery Phrase", StringComparison.OrdinalIgnoreCase));
+            }
+            catch
+            {
+                return false;
             }
         }
 

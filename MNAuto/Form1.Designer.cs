@@ -54,6 +54,7 @@
             this.txtLog = new System.Windows.Forms.TextBox();
             this.btnClearLog = new System.Windows.Forms.Button();
             this.btnExportAll = new System.Windows.Forms.Button();
+            this.btnImportExcel = new System.Windows.Forms.Button();
             
             // Cấu hình các controls
             this.lblProfileCount.AutoSize = true;
@@ -172,6 +173,15 @@
             this.btnExportAll.UseVisualStyleBackColor = true;
             this.btnExportAll.Click += new System.EventHandler(this.btnExportAll_Click);
             
+            this.btnImportExcel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+            this.btnImportExcel.Location = new System.Drawing.Point(924, 380);
+            this.btnImportExcel.Name = "btnImportExcel";
+            this.btnImportExcel.Size = new System.Drawing.Size(150, 30);
+            this.btnImportExcel.TabIndex = 13;
+            this.btnImportExcel.Text = "Import từ Excel";
+            this.btnImportExcel.UseVisualStyleBackColor = true;
+            this.btnImportExcel.Click += new System.EventHandler(this.btnImportExcel_Click);
+            
             this.lblLog.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
             this.lblLog.AutoSize = true;
@@ -216,6 +226,7 @@
             this.Controls.Add(this.btnDeleteSelected);
             this.Controls.Add(this.btnRefresh);
             this.Controls.Add(this.btnExportAll);
+            this.Controls.Add(this.btnImportExcel);
             this.Controls.Add(this.lblLog);
             this.Controls.Add(this.txtLog);
             this.Controls.Add(this.btnClearLog);
@@ -240,5 +251,6 @@
         private System.Windows.Forms.Label lblLog;
         private System.Windows.Forms.TextBox txtLog;
         private System.Windows.Forms.Button btnClearLog;
+        private System.Windows.Forms.Button btnImportExcel;
     }
 }
